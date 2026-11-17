@@ -2,7 +2,7 @@
 
 > A self-hosted personal agent with **OpenClaw's reach** and **Hermes' ability to learn**, where **your notes vault is the agent's brain, configuration and control panel**.
 
-Status: **draft for discussion**. Background is in [RESEARCH.md](RESEARCH.md). It is designed around four requirements: maximum customizability, a local structure such as Obsidian, the best-fitting language, and one self-contained folder that holds the whole agent.
+Status: **M0 is built** (see the README for what works and the known gaps). Later milestones are still a plan. Background is in [RESEARCH.md](RESEARCH.md). It is designed around four requirements: maximum customizability, a local structure such as Obsidian, the best-fitting language, and one self-contained folder that holds the whole agent.
 
 ## 1. Design principles
 

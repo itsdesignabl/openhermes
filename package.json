@@ -1,0 +1,30 @@
+{
+  "name": "openhermes",
+  "version": "0.1.0",
+  "description": "Self-hosted personal agent: OpenClaw's reach, Hermes' learning, one folder, your vault.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "openhermes": "dist/src/cli.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "tsc -p . && node --test \"dist/test/*.test.js\"",
+    "start": "node dist/src/cli.js"
+  },
+  "dependencies": {
+    "ink": "^6.8.0",
+    "isomorphic-git": "^1.44.16",
+    "react": "^19.3.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

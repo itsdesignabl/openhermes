@@ -4,6 +4,43 @@ import { z } from "zod";
 import { parseNote } from "../vault/frontmatter.js";
 import type { Home } from "./home.js";
 
+const ChannelSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Name of the entry in secrets/keys.json that holds the bot token. */
+  token_secret: z.string().default(""),
+  /** Sender ids that may talk to the agent without pairing. */
+  allow_from: z.array(z.coerce.string()).default([]),
+  /** Unknown senders get a pairing code to be approved with `openhermes pair approve`. When false they are ignored. */
+  pairing: z.boolean().default(true),
+  /** In group chats, answer only when the bot is mentioned. */
+  require_mention: z.boolean().default(true),
+});
+
+/** Per-agent settings from Agents/<name>/agent.md. Anything left out falls back to System/config.md. */
+export const AgentSettingsSchema = z.object({
+  provider: z
+    .object({
+      base_url: z.string().optional(),
+      model: z.string().optional(),
+      api_key_secret: z.string().optional(),
+      temperature: z.number().optional(),
+    })
+    .prefault({}),
+  /** If set, only these tools are offered to this agent. */
+  tools: z.array(z.string()).optional(),
+  heartbeat: z
+    .object({
+      /** "30m", "2h", or "0m" to turn it off. */
+      every: z.string().default("30m"),
+      /** "last" (the chat that last spoke to this agent), "none", or "<channel>:<chat id>". */
+      target: z.string().default("last"),
+      /** Local time window such as "08:00-22:00". Empty means always. */
+      active_hours: z.string().default(""),
+    })
+    .prefault({}),
+});
+export type AgentSettings = z.infer<typeof AgentSettingsSchema>;
+
 export const ConfigSchema = z.object({
   agent: z.string().default("main"),
   provider: z
@@ -37,6 +74,37 @@ export const ConfigSchema = z.object({
       memory_max_chars: z.number().default(4000),
       user_max_chars: z.number().default(2000),
       search_results: z.number().default(5),
+    })
+    .prefault({}),
+  session: z
+    .object({
+      /** Older turns beyond this many characters are dropped from what the model sees. They stay in the transcript and in search. */
+      history_max_chars: z.number().default(16000),
+    })
+    .prefault({}),
+  gateway: z
+    .object({
+      host: z.string().default("127.0.0.1"),
+      port: z.number().default(18789),
+      /** Must be set to true before the gateway will listen on anything other than this computer. */
+      allow_remote: z.boolean().default(false),
+      approval_timeout_s: z.number().default(300),
+    })
+    .prefault({}),
+  channels: z
+    .object({
+      telegram: ChannelSchema.extend({ api_base: z.string().default("https://api.telegram.org") }).prefault({}),
+      discord: ChannelSchema.extend({
+        api_base: z.string().default("https://discord.com/api/v10"),
+        gateway_url: z.string().default("wss://gateway.discord.gg/?v=10&encoding=json"),
+      }).prefault({}),
+    })
+    .prefault({}),
+  routing: z
+    .object({
+      default_agent: z.string().default(""),
+      /** First match wins. A binding without `peer` matches every chat on that channel. */
+      bindings: z.array(z.object({ channel: z.string(), peer: z.coerce.string().optional(), agent: z.string() })).default([]),
     })
     .prefault({}),
   plugins: z.array(z.string()).default([]),
@@ -79,6 +147,25 @@ export function loadConfig(home: Home): Config {
 
 export function loadPolicies(home: Home): Policies {
   return PoliciesSchema.parse(readFrontmatter(policiesPath(home)));
+}
+
+export function loadAgentSettings(home: Home, agent: string): AgentSettings {
+  return AgentSettingsSchema.parse(readFrontmatter(path.join(home.vault, "Agents", agent, "agent.md")));
+}
+
+export function listAgents(home: Home): string[] {
+  const dir = path.join(home.vault, "Agents");
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
+}
+
+export function writeSecret(home: Home, name: string, value: string): void {
+  const file = path.join(home.secrets, "keys.json");
+  fs.mkdirSync(home.secrets, { recursive: true });
+  const keys = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>) : {};
+  if (value) keys[name] = value;
+  else delete keys[name];
+  fs.writeFileSync(file, JSON.stringify(keys, null, 2), { mode: 0o600 });
 }
 
 export function readSecret(home: Home, name: string): string | undefined {

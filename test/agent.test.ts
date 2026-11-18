@@ -69,7 +69,7 @@ test("a turn runs tools, writes the vault, records the session and commits", asy
 
       // one commit for the turn, listing the changed files
       const log = await app.history.log(2);
-      assert.match(log[0]!.message, /^Turn: make a todo/);
+      assert.match(log[0]!.message, /^Turn \(main\): make a todo/);
       assert.match(log[0]!.message, /- Notes\/todo\.md/);
       assert.match(log[0]!.message, /- Memory\/USER\.md/);
       assert.equal(log[1]!.message.trim(), "Initial vault");
@@ -306,7 +306,7 @@ test("a user plugin from runtime/plugins can add a tool; a broken one is reporte
     const provider = new ScriptedProvider([{ calls: [{ name: "roll_dice", args: { sides: 6 } }] }, { content: "ok" }]);
     const app = await App.start(home, { provider, watch: false });
     try {
-      assert.deepEqual(app.registry.loaded, ["core-tools", "dice"]);
+      assert.deepEqual(app.registry.loaded, ["core-tools", "core-channels", "dice"]);
       await app.send("roll");
       assert.equal(provider.lastToolOutputs()[0], "rolled a 6");
     } finally {

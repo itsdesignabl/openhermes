@@ -8,10 +8,21 @@ const DIRS = [
 
 const FILES: Record<string, string> = {
   "Agents/main/agent.md": `---
-name: main
+heartbeat:
+  every: 30m          # 0m turns it off
+  target: last        # last | none | telegram:<chat id> | discord:<channel id>
+  active_hours: ""    # for example 08:00-22:00
 ---
 
-Settings for this agent. Values here override \`System/config.md\` for this agent (from M1).
+# Agent settings
+
+Optional overrides for this agent only:
+
+- \`provider\`: \`base_url\`, \`model\`, \`api_key_secret\`, \`temperature\`
+- \`tools\`: a list of tool names; when present, only these are offered
+- \`heartbeat\`: how often the agent checks \`HEARTBEAT.md\` and where it reports
+
+To add another agent, copy this folder under a new name and add a binding in \`System/config.md\`.
 `,
   "Agents/main/SOUL.md": `# Soul
 
@@ -28,7 +39,9 @@ You prefer doing the task over describing it. You keep answers short unless aske
 `,
   "Agents/main/HEARTBEAT.md": `# Heartbeat
 
-<!-- Checklist for proactive work. Empty means the heartbeat is skipped. Used from M1. -->
+<!-- Checklist for proactive work, read on every heartbeat while the gateway runs.
+     While there are no items here the heartbeat is skipped and costs nothing. Example:
+     - If a note in Inbox/ is older than two days, remind me about it. -->
 `,
   "Memory/MEMORY.md": `# Memory
 
@@ -57,6 +70,26 @@ memory:
   memory_max_chars: 4000
   user_max_chars: 2000
   search_results: 5
+session:
+  history_max_chars: 16000
+gateway:
+  host: 127.0.0.1
+  port: 18789
+  approval_timeout_s: 300
+channels:
+  telegram:
+    enabled: false
+    allow_from: []      # Telegram user ids that need no pairing
+    pairing: true
+    require_mention: true
+  discord:
+    enabled: false
+    allow_from: []
+    pairing: true
+    require_mention: true
+routing:
+  default_agent: main
+  bindings: []          # for example: - { channel: telegram, peer: "12345", agent: work }
 plugins: []
 ---
 
@@ -66,7 +99,26 @@ Edit the properties above. Changes are picked up without a restart.
 
 - \`provider\`: which model endpoint to talk to.
 - \`local_model\`: the model file in \`models/\` and how the bundled server runs it.
+- \`gateway\`: where the always-on process listens. It only accepts connections from this computer.
+- \`channels\`: chat services. Store the bot token with \`openhermes secret set telegram_bot_token\` (or \`discord_bot_token\`), set \`enabled: true\`, and restart the gateway.
+- \`routing\`: which agent answers which chat. The first matching binding wins.
 - \`plugins\`: extra plugin modules to load from \`runtime/plugins/\`.
+`,
+  "Jobs/README.md": `# Jobs
+
+Each note in this folder with a schedule in its properties is a job. The text below the properties is the instruction the agent receives. Jobs run while the gateway is running.
+
+\`\`\`
+---
+schedule: "0 9 * * 1-5"   # minute hour day month weekday, local time
+agent: main
+target: last              # last | none | telegram:<chat id> | discord:<channel id>
+---
+
+Summarise yesterday's daily note in three bullet points.
+\`\`\`
+
+Use \`every: 2h\` for a fixed interval or \`at: 2026-12-01T09:00\` for a single run, in place of \`schedule\`. Add \`enabled: false\` to pause a job.
 `,
   "System/policies.md": `---
 policies:

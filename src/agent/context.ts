@@ -33,6 +33,7 @@ export function listSkills(home: Home): SkillInfo[] {
 /** The system prompt is rebuilt every turn, so edits made in Obsidian apply immediately. */
 export function buildSystemPrompt(home: Home, agentName: string): string {
   const agentDir = path.join(home.vault, "Agents", agentName);
+  // an agent may keep private memory in its own folder; it is added to the shared memory
   const parts: string[] = [];
   const add = (title: string, text: string) => {
     if (text) parts.push(`## ${title}\n\n${text}`);
@@ -41,6 +42,7 @@ export function buildSystemPrompt(home: Home, agentName: string): string {
   add("Operating rules", read(path.join(agentDir, "AGENTS.md")));
   add("About the user", read(path.join(home.vault, "Memory", "USER.md")));
   add("Long-term memory", read(path.join(home.vault, "Memory", "MEMORY.md")));
+  add("Your private memory", read(path.join(agentDir, "MEMORY.md")));
   const skills = listSkills(home);
   if (skills.length) {
     add(

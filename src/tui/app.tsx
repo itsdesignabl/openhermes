@@ -1,7 +1,8 @@
 import { Box, Static, Text, render, useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
-import { App } from "../app.js";
+import { openBackend, type Backend } from "./backend.js";
 import type { Home } from "../kernel/home.js";
+import type { UiEvent } from "./backend.js";
 
 type Item =
   | { id: number; kind: "user" | "assistant" | "info" | "error"; text: string }
@@ -24,10 +25,10 @@ const HELP = [
 
 let nextId = 1;
 
-function Chat({ app, approvals }: { app: App; approvals: { current?: (p: Pending) => void } }) {
+function Chat({ app }: { app: Backend }) {
   const { exit } = useApp();
   const [items, setItems] = useState<Item[]>([
-    { id: nextId++, kind: "info", text: `OpenHermes · ${app.modelLabel()} · ${app.home.root}\nType a message, or /help.` },
+    { id: nextId++, kind: "info", text: `OpenHermes · ${app.label} · ${app.root}\nType a message, or /help.` },
   ]);
   const [live, setLive] = useState("");
   const [tools, setTools] = useState<Extract<Item, { kind: "tool" }>[]>([]);
@@ -38,27 +39,21 @@ function Chat({ app, approvals }: { app: App; approvals: { current?: (p: Pending
   const push = (item: Omit<Item, "id"> & Record<string, unknown>) => setItems((prev) => [...prev, { ...item, id: nextId++ } as Item]);
 
   useEffect(() => {
-    approvals.current = (p) => setPending(p);
-    const offs = [
-      app.bus.on("assistant.delta", (e) => setLive((t) => t + e.text)),
-      app.bus.on("assistant.message", (e) => {
-        setLive("");
-        push({ kind: "assistant", text: e.text });
-      }),
-      app.bus.on("tool.requested", (e) =>
-        setTools((t) => [...t, { id: nextId++, kind: "tool", name: e.name, args: compact(e.args) }]),
-      ),
-      app.bus.on("tool.finished", (e) => {
-        setTools((t) => t.filter((x) => !(x.name === e.name && x.ok === undefined)));
-        push({ kind: "tool", name: e.name, args: "", ok: e.ok, summary: e.summary });
-      }),
-      app.bus.on("log", (e) => push({ kind: e.level === "error" ? "error" : "info", text: e.message })),
-      app.bus.on("config.reloaded", (e) =>
-        push(e.ok ? { kind: "info", text: "Settings reloaded." } : { kind: "error", text: `Settings not applied, keeping the previous ones: ${e.error}` }),
-      ),
-    ];
-    return () => offs.forEach((off) => off());
+    app.onNotice((level, message) => push({ kind: level === "error" ? "error" : "info", text: message }));
   }, []);
+
+  const onEvent = (e: UiEvent) => {
+    if (e.type === "delta") setLive((t) => t + e.text);
+    else if (e.type === "message") {
+      setLive("");
+      push({ kind: "assistant", text: e.text });
+    } else if (e.type === "tool_requested") setTools((t) => [...t, { id: nextId++, kind: "tool", name: e.name, args: compact(e.args) }]);
+    else if (e.type === "tool_finished") {
+      setTools((t) => t.filter((x) => x.name !== e.name));
+      push({ kind: "tool", name: e.name, args: "", ok: e.ok, summary: e.summary });
+    } else if (e.type === "log") push({ kind: e.level === "error" ? "error" : "info", text: e.message });
+  };
+  const ask = (action: string, detail: string) => new Promise<boolean>((resolve) => setPending({ action, detail, resolve }));
 
   const submit = async (text: string) => {
     if (text.startsWith("/")) return command(text);
@@ -66,7 +61,7 @@ function Chat({ app, approvals }: { app: App; approvals: { current?: (p: Pending
     setBusy(true);
     abort.current = new AbortController();
     try {
-      await app.send(text, abort.current.signal);
+      await app.send(text, onEvent, ask, abort.current.signal);
     } catch (err) {
       push({ kind: "error", text: abort.current.signal.aborted ? "Stopped." : (err as Error).message });
     } finally {
@@ -82,19 +77,19 @@ function Chat({ app, approvals }: { app: App; approvals: { current?: (p: Pending
     if (cmd === "quit" || cmd === "exit") return exit();
     if (cmd === "help") return push({ kind: "info", text: HELP });
     if (cmd === "new") {
-      app.newSession();
+      await app.newSession();
       return push({ kind: "info", text: "New conversation started." });
     }
     if (cmd === "search") {
-      const hits = app.memory.search(arg, 8);
+      const hits = await app.search(arg);
       return push({ kind: "info", text: hits.length ? hits.map((h) => `${h.path}${h.heading ? " › " + h.heading : ""}\n  ${h.snippet}`).join("\n") : "No matches." });
     }
     if (cmd === "history") {
-      const log = await app.history.log(8);
-      return push({ kind: "info", text: log.map((e) => `${e.date.toISOString().slice(0, 16).replace("T", " ")}  ${e.message.split("\n")[0]}`).join("\n") });
+      const log = await app.history();
+      return push({ kind: "info", text: log.map((e) => `${e.date.slice(0, 16).replace("T", " ")}  ${e.message.split("\n")[0]}`).join("\n") });
     }
     if (cmd === "policy") {
-      const p = app.policies.policies;
+      const p = await app.policies();
       return push({ kind: "info", text: Object.entries(p).map(([k, v]) => `${k.padEnd(24)} ${v}`).join("\n") + "\nEdit vault/System/policies.md to change these." });
     }
     push({ kind: "error", text: `Unknown command /${cmd}. Try /help.` });
@@ -190,15 +185,8 @@ function compact(args: unknown): string {
 }
 
 export async function runTui(home: Home): Promise<void> {
-  const approvals: { current?: (p: Pending) => void } = {};
-  const app = await App.start(home, {
-    approver: (action, detail) =>
-      new Promise<boolean>((resolve) => {
-        if (approvals.current) approvals.current({ action, detail, resolve });
-        else resolve(false);
-      }),
-  });
-  const ui = render(<Chat app={app} approvals={approvals} />, { exitOnCtrlC: false });
+  const backend = await openBackend(home);
+  const ui = render(<Chat app={backend} />, { exitOnCtrlC: false });
   await ui.waitUntilExit();
-  await app.stop();
+  await backend.close();
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ChannelFactory } from "../channels/types.js";
 import type { Provider } from "../provider/openai.js";
 import type { Tool } from "../tools/types.js";
 import type { Bus } from "./bus.js";
@@ -13,6 +14,8 @@ export interface PluginApi {
   bus: Bus;
   config: () => Config;
   registerTool(tool: Tool<any>): void;
+  /** Add a chat channel. It is started by the gateway when channels.<name>.enabled is true, or always for channels the settings do not know. */
+  registerChannel(name: string, factory: ChannelFactory): void;
   /** Replace the model provider. The last plugin to call this wins. */
   setProvider(factory: () => Provider): void;
 }
@@ -24,6 +27,7 @@ export interface Plugin {
 
 export class Registry {
   readonly tools = new Map<string, Tool<any>>();
+  readonly channels = new Map<string, ChannelFactory>();
   providerFactory?: () => Provider;
   readonly loaded: string[] = [];
 }
@@ -39,6 +43,7 @@ export async function loadPlugins(home: Home, bus: Bus, config: () => Config, bu
     bus,
     config,
     registerTool: (tool) => void registry.tools.set(tool.name, tool),
+    registerChannel: (name, factory) => void registry.channels.set(name, factory),
     setProvider: (factory) => void (registry.providerFactory = factory),
   };
   for (const plugin of builtins) {

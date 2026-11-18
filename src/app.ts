@@ -13,6 +13,12 @@ import { PolicyEngine, type Approver } from "./kernel/policy.js";
 import { MemoryIndex } from "./memory/index.js";
 import { LocalModel } from "./model/local.js";
 import { OpenAIProvider, type Provider } from "./provider/openai.js";
+import { DockerBackend } from "./backend/docker.js";
+import { LocalBackend } from "./backend/local.js";
+import { SshBackend } from "./backend/ssh.js";
+import type { Backend } from "./backend/types.js";
+import { formatNote, parseNote } from "./vault/frontmatter.js";
+import fs from "node:fs";
 import { DiscordChannel } from "./channels/discord.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import { builtinTools } from "./tools/builtin.js";
@@ -51,6 +57,15 @@ const corePlugin: Plugin = {
   },
 };
 
+const backendsPlugin: Plugin = {
+  name: "core-backends",
+  setup(api) {
+    api.registerBackend("local", () => new LocalBackend(api.home));
+    api.registerBackend("docker", () => new DockerBackend(api.home, api.config));
+    api.registerBackend("ssh", () => new SshBackend(api.config));
+  },
+};
+
 const channelsPlugin: Plugin = {
   name: "core-channels",
   setup(api) {
@@ -74,6 +89,9 @@ export class App {
   private watcher?: VaultWatcher;
   private localModel: LocalModel;
   private providers = new Map<string, Provider>();
+  private activeBackend?: Backend;
+  /** Messages logged while starting (for example a plugin that failed to load), for interfaces that attach afterwards. */
+  readonly startupLogs: { level: "info" | "warn" | "error"; message: string }[] = [];
   /** Turns run one at a time: one local model, one vault history. */
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -86,7 +104,8 @@ export class App {
   static async start(home: Home, opts: AppOptions = {}): Promise<App> {
     if (!home.exists()) throw new Error(`No OpenHermes home at ${home.root}. Run: openhermes init`);
     const app = new App(home, opts);
-    app.registry = await loadPlugins(home, app.bus, () => app.config, [corePlugin, channelsPlugin]);
+    const stopCollecting = app.bus.on("log", (e) => void app.startupLogs.push(e));
+    app.registry = await loadPlugins(home, app.bus, () => app.config, [corePlugin, backendsPlugin, channelsPlugin]);
     app.memory = new MemoryIndex(path.join(home.data, "index.db"), home.vault);
     app.memory.sync();
     app.history = new VaultHistory(home.vault);
@@ -97,6 +116,7 @@ export class App {
       app.watcher = new VaultWatcher(home.vault, (abs, by) => void app.onFileChanged(abs, by));
       app.watcher.start();
     }
+    stopCollecting();
     return app;
   }
 
@@ -170,6 +190,36 @@ export class App {
     return this.config.provider.base_url ? `${this.config.provider.model} @ ${this.config.provider.base_url}` : "bundled local model";
   }
 
+  /** Where shell commands run, as chosen by backend.type. Switching the setting takes effect on the next command. */
+  get backend(): Backend {
+    const type = this.config.backend.type;
+    if (this.activeBackend?.name === type) return this.activeBackend;
+    const factory = this.registry.backends.get(type);
+    if (!factory) {
+      void this.bus.emit("log", { level: "error", message: `backend.type '${type}' is not known (available: ${[...this.registry.backends.keys()].join(", ")}). Commands are refused until it is corrected.` });
+      return { name: type, sandboxed: true, describe: () => "", run: async () => ({ code: null, output: `Commands cannot run: backend.type '${type}' in System/config.md is not known.` }), check: async () => `backend.type '${type}' is not known`, stop: async () => {} };
+    }
+    void this.activeBackend?.stop().catch(() => {});
+    return (this.activeBackend = factory());
+  }
+
+  /** The user answered "always" to a command: add it to the allowlist in System/policies.md. */
+  private allowAlways(command: string): void {
+    try {
+      const file = policiesPath(this.home);
+      const note = parseNote<Record<string, any>>(fs.readFileSync(file, "utf8"));
+      const list: string[] = Array.isArray(note.data.command_allowlist) ? note.data.command_allowlist.map(String) : [];
+      if (list.includes(command)) return;
+      note.data.command_allowlist = [...list, command];
+      fs.writeFileSync(file, formatNote(note.data, note.body));
+      this.recordWrite(file);
+      this.reloadConfig();
+      void this.bus.emit("log", { level: "info", message: `Added to the command allowlist: ${command}` });
+    } catch (err) {
+      void this.bus.emit("log", { level: "error", message: `Could not add the command to the allowlist: ${(err as Error).message}` });
+    }
+  }
+
   /** The conversation for a key, created on first use. */
   conversation(key: string, agent?: string, resume = false): Session {
     let s = this.sessions.get(key);
@@ -216,9 +266,10 @@ export class App {
       async (action, detail) => {
         await this.bus.emit("approval.requested", { sessionId, action, detail });
         const approved = approver ? await approver(action, detail) : false;
-        await this.bus.emit("approval.resolved", { sessionId, action, approved });
+        await this.bus.emit("approval.resolved", { sessionId, action, approved: !!approved });
         return approved;
       },
+      (command) => this.allowAlways(command),
     );
     const skillPath = /^Skills\/([^/]+)\/SKILL\.md$/i;
     return {
@@ -226,6 +277,7 @@ export class App {
       config: () => this.config,
       policy,
       memory: this.memory,
+      backend: this.backend,
       agentName: agent,
       userText,
       wrote: (abs) => {
@@ -260,9 +312,16 @@ export class App {
     const ctx = this.toolContext(agent, text, o.approver ?? this.opts.approver, session.id, sessionFile);
     let tools = [...this.registry.tools.values()];
     if (settings.tools) tools = tools.filter((t) => settings.tools!.includes(t.name));
-    const system = buildSystemPrompt(this.home, agent) + (o.systemNote ? `\n\n${o.systemNote}` : "");
+    const system = buildSystemPrompt(this.home, agent, this.backend.describe()) + (o.systemNote ? `\n\n${o.systemNote}` : "");
+    const hooks = this.registry.hooks;
+    const hookInfo = { agent, conversation: session.key };
     try {
+      const before = await hooks.run("turn.before", { ...hookInfo, text });
+      if (typeof before.text === "string") text = before.text;
+      ctx.userText = text;
       const result = await runTurn({
+        hooks,
+        hookInfo,
         sessionId: session.id,
         system,
         history: recentHistory(session.history, this.config.session.history_max_chars),
@@ -278,6 +337,7 @@ export class App {
       session.append(result.messages, o.persist ?? false);
       this.recordWrite(session.file);
       this.learner.afterTurn(session);
+      await hooks.run("turn.after", { ...hookInfo, text: result.text, tools_used: result.toolsUsed });
       return result;
     } finally {
       // files written before a failure are still recorded in the history
@@ -288,6 +348,8 @@ export class App {
   async stop(): Promise<void> {
     this.watcher?.stop();
     await this.queue;
+    await this.activeBackend?.stop().catch(() => {});
+    await Promise.all(this.registry.externals.map((p) => p.stop().catch(() => {})));
     this.localModel.stop();
     this.memory.close();
   }

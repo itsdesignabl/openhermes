@@ -9,7 +9,8 @@ import { Pairing } from "./pairing.js";
 import { HEARTBEAT_OK, Scheduler, type ScheduledRun } from "./scheduler.js";
 
 interface PendingApproval {
-  resolve: (ok: boolean) => void;
+  resolve: (ok: boolean | "always") => void;
+  canAlways: boolean;
   timer: NodeJS.Timeout;
 }
 
@@ -181,15 +182,16 @@ export class Gateway {
     const pending = this.approvals.get(chatKey);
     if (pending) {
       const answer = m.text.trim().toLowerCase();
+      const always = pending.canAlways && /^always\b/.test(answer);
       const yes = /^(y|yes|ok|allow|approve)\b/.test(answer);
       const no = /^(n|no|deny|decline|stop)\b/.test(answer);
-      if (yes || no) {
+      if (always || yes || no) {
         clearTimeout(pending.timer);
         this.approvals.delete(chatKey);
-        pending.resolve(yes);
+        pending.resolve(always ? "always" : yes);
         return;
       }
-      await channel.send(m.peer, "I am waiting for your decision on the request above. Reply yes or no.");
+      await channel.send(m.peer, `I am waiting for your decision on the request above. Reply yes or no${pending.canAlways ? ", or always" : ""}.`);
       return;
     }
 
@@ -243,21 +245,34 @@ export class Gateway {
   }
 
   /** Ask for approval in a chat and wait for a yes or no. No answer within the time limit counts as no. */
-  async askPeer(channelName: string, peer: string, action: string, detail: string): Promise<boolean> {
+  async askPeer(channelName: string, peer: string, action: string, detail: string): Promise<boolean | "always"> {
     const channel = this.channels.get(channelName);
     if (!channel) return false;
     const key = `${channelName}:${peer}`;
     if (this.approvals.has(key)) return false;
     const timeoutS = this.app.config.gateway.approval_timeout_s;
-    await channel.send(peer, `Approval needed (${action}):\n${detail}\n\nReply yes or no.`);
-    return new Promise<boolean>((resolve) => {
+    const canAlways = action.startsWith("command.");
+    // Register the question before sending it, so even an immediate reply is taken as the answer.
+    const answer = new Promise<boolean | "always">((resolve) => {
       const timer = setTimeout(() => {
         this.approvals.delete(key);
         resolve(false);
         void channel.send(peer, "No answer, so I did not do it.").catch(() => {});
       }, timeoutS * 1000);
-      this.approvals.set(key, { resolve, timer });
+      this.approvals.set(key, { resolve, timer, canAlways });
     });
+    try {
+      await channel.send(peer, `Approval needed (${action}):\n${detail}\n\nReply yes or no${canAlways ? ", or always to allow this command from now on" : ""}.`);
+    } catch (err) {
+      const pending = this.approvals.get(key);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.approvals.delete(key);
+      }
+      this.log("error", `could not ask for approval in ${key}: ${(err as Error).message}`);
+      return false;
+    }
+    return answer;
   }
 
   private resolveTarget(target: string, agent: string): { channel: Channel; peer: string } | null {

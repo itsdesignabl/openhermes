@@ -1,6 +1,8 @@
 import type { Policies, PolicyAction, PolicyValue } from "./config.js";
 
-export type Approver = (action: PolicyAction, detail: string) => Promise<boolean>;
+/** true: allow once. "always": allow, and for commands add it to the allowlist. false: decline. */
+export type Approval = boolean | "always";
+export type Approver = (action: PolicyAction, detail: string) => Promise<Approval>;
 
 export class PolicyDenied extends Error {
   constructor(action: string, reason: string) {
@@ -11,7 +13,12 @@ export class PolicyDenied extends Error {
 
 /** Decides auto / ask / deny for each kind of action, asking the user through the active channel. */
 export class PolicyEngine {
-  constructor(private getPolicies: () => Policies, private approver: Approver) {}
+  constructor(
+    private getPolicies: () => Policies,
+    private approver: Approver,
+    /** Called when the user answers "always" to a command. */
+    private onAlways: (command: string) => void = () => {},
+  ) {}
 
   valueOf(action: PolicyAction): PolicyValue {
     return this.getPolicies().policies[action];
@@ -27,11 +34,13 @@ export class PolicyEngine {
     });
   }
 
-  async check(action: PolicyAction, detail: string): Promise<void> {
+  /** `command` is given for command actions, so "always" knows what to add to the allowlist. */
+  async check(action: PolicyAction, detail: string, command?: string): Promise<void> {
     const value = this.valueOf(action);
     if (value === "auto") return;
     if (value === "deny") throw new PolicyDenied(action, "policy is set to deny");
-    const ok = await this.approver(action, detail);
-    if (!ok) throw new PolicyDenied(action, "the user declined");
+    const answer = await this.approver(action, detail);
+    if (!answer) throw new PolicyDenied(action, "the user declined");
+    if (answer === "always" && command && !/[;&|<>`\n]|\$\(/.test(command)) this.onAlways(command.trim());
   }
 }

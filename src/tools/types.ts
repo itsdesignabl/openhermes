@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { Config } from "../kernel/config.js";
 import type { Home } from "../kernel/home.js";
 import type { PolicyEngine } from "../kernel/policy.js";
+import type { Backend } from "../backend/types.js";
 import type { MemoryIndex } from "../memory/index.js";
 
 export interface ToolContext {
@@ -9,6 +10,7 @@ export interface ToolContext {
   config: () => Config;
   policy: PolicyEngine;
   memory: MemoryIndex;
+  backend: Backend;
   agentName: string;
   /** Text of the user's message for this turn. Used to tell user-referenced paths from agent-chosen ones. */
   userText: string;
@@ -22,6 +24,8 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   name: string;
   description: string;
   schema: S;
+  /** For tools defined outside this program: the parameter schema to show the model, in place of one derived from `schema`. */
+  jsonSchema?: Record<string, unknown>;
   run(args: z.infer<S>, ctx: ToolContext): Promise<string>;
 }
 

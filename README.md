@@ -7,7 +7,7 @@ A self-hosted personal AI agent that brings together two open-source approaches:
 
 Everything the agent knows and does lives as Markdown in a local vault you can open in Obsidian, inside one self-contained folder. Delete that folder and the agent and all its data are gone.
 
-**Status:** milestones M0 (kernel and vault), M1 (gateway, Telegram, Discord, heartbeat, jobs) and M2 (learning loop) are built. Sandboxed commands come in M3; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
+**Status:** milestones M0 (kernel and vault), M1 (gateway, Telegram, Discord, heartbeat, jobs) M2 (learning loop) and M3 (sandboxed commands, skill scanner, plugins in any language) are built. Importers for OpenClaw and Hermes come in M4; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
 
 ## What works in M0
 
@@ -39,6 +39,16 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 - Every skill records where it came from, who approved it, and how often it is used
 - A cleanup removes repeated memory entries, merges a memory file that is nearly full, and archives skills the agent wrote and no longer uses
 - The agent cannot approve its own suggestions, and passwords or keys are never written to memory
+
+## What M3 adds
+
+- **Sandboxed commands:** with `backend.type: docker` the agent's shell commands run in a container that sees only the workspace folder and, read-only, the vault. Your keys, the program and the rest of the computer are not visible to it
+- **Commands on another machine:** `backend.type: ssh` runs them over SSH
+- **"Always" for commands:** when asked to approve a command you can answer always, which adds it to the allowlist
+- **Skill import with a scanner:** `skills import <folder>` copies a skill in, checks every file for known attack patterns, and holds it for review. The agent can read a skill under review but cannot run anything from it until you approve it. If its files change later, it goes back under review
+- **Hooks:** small programs in any language that run before or after a turn or tool call and can refuse or change it
+- **Plugins in any language:** a separate program that adds tools and hooks over a simple JSON protocol. See [docs/PLUGINS.md](docs/PLUGINS.md) and the Python examples in `examples/`
+- **Settings are off limits to the agent:** it can no longer edit anything in `vault\System\` or an agent's `agent.md`
 
 ## Install (Windows)
 
@@ -128,7 +138,8 @@ openhermes ask "what do you remember about my projects?"
 | `gateway start`, `stop`, `status` | Run the always-on gateway in the background |
 | `gateway run` | Run it in the current window, with its log on screen |
 | `inbox`, `inbox approve <id>`, `inbox reject <id>` | See and decide what the agent wants to keep |
-| `skills` | List skills with their origin and use count |
+| `skills` | List skills with their origin, trust level and use count |
+| `skills import <folder>`, `skills trust <name>`, `skills scan <name>`, `skills block <name>` | Bring in a skill from elsewhere and decide whether to trust it |
 | `reflect [session note]` | Review a conversation now (default: the latest) |
 | `curate` | Run the cleanup now |
 | `pair list`, `approve <code>`, `revoke <id>` | Manage who may talk to the agent |
@@ -169,6 +180,31 @@ openhermes pair approve <code>
 5. Send the bot a direct message and approve the pairing code as above.
 
 In group chats and servers the agent answers only when mentioned, and only to people you have approved. `/new` in a chat starts a fresh conversation.
+
+## Run commands in a sandbox
+
+Without a sandbox, a shell command the agent runs can reach any file you can. To confine commands:
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
+2. In `vault\System\config.md` set `backend.type: docker`.
+3. Check it:
+
+```bash
+openhermes doctor
+```
+
+Commands then start in `/workspace` (your `workspace` folder) inside a Linux container. The vault is at `/vault`, read-only. The container is created on the first command, kept while the agent runs so installed tools persist, and removed when it stops.
+
+| Setting under `backend.docker` | Default | Meaning |
+|---|---|---|
+| `image` | `python:3.12-slim` | What is installed in the container |
+| `network` | `bridge` | `none` cuts the container off from the internet |
+| `mount_vault` | `ro` | `rw` lets commands change the vault, `none` hides it |
+| `memory`, `cpus`, `pids_limit` | `2g`, `2`, `512` | Limits |
+
+Commands that are not on the allowlist follow the `command.sandboxed` policy when the sandbox is on. Set it to `auto` in `policies.md` if you want the agent to work in the sandbox without asking.
+
+If Docker is not running, commands fail with a message. They never fall back to running on your computer.
 
 ## Scheduled work
 
@@ -213,7 +249,11 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 
 - **Nothing has been run against a real model, real Telegram or real Discord.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
-- **Commands are not sandboxed.** File tools are strictly contained, but a shell command the agent runs can touch other paths. Commands not on the allowlist ask for approval first.
+- **Commands are not sandboxed by default.** With `backend.type: local`, a shell command can touch any path, including the settings files the agent's file tools are barred from. Commands not on the allowlist ask for approval first. Use the Docker backend to confine them.
+- **The Docker backend was tested on Linux only**, with a real Docker daemon and an Alpine image. It has not been run with Docker Desktop on Windows, and the default image `python:3.12-slim` could not be downloaded in the test environment.
+- **The SSH backend was tested against a stand-in**, not a real remote machine.
+- **The scanner matches known patterns.** It catches the common attack shapes and is not a guarantee. Read an imported skill before trusting it.
+- **Hooks and plugins run on your computer without a sandbox,** with your rights.
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
 - **One turn at a time.** Messages from different chats queue behind each other, and a turn waiting for an approval holds the queue until you answer or the time limit (5 minutes by default) passes.

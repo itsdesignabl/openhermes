@@ -33,6 +33,8 @@ const HELP = `openhermes <command> [options]
   reflect [session note]   Review a conversation now for things worth keeping (default: the latest)
   curate                   Tidy memory and archive unused skills now
   skills                   List skills with where they came from and how often they were used
+  skills import <folder>   Copy in a skill from elsewhere; it is scanned and waits for your approval
+  skills trust <name>      Approve an imported skill (also: skills scan <name>, skills block <name>)
   eval [--only <text>]     Run the tool-calling test against the configured model
   history                  Show the agent's recent changes to the vault
   doctor                   Check the installation
@@ -53,6 +55,7 @@ export async function main(argv: string[]): Promise<number> {
       "server-url": { type: "string" },
       url: { type: "string" },
       only: { type: "string" },
+      force: { type: "boolean" },
     },
   });
   const [command, ...rest] = positionals;
@@ -99,9 +102,10 @@ export async function main(argv: string[]): Promise<number> {
               return false;
             }
             const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-            const reply = await rl.question(`Allow ${action}: ${detail}? [y/N] `);
+            const canAlways = action.startsWith("command.");
+            const reply = (await rl.question(`Allow ${action}: ${detail}? [y/N${canAlways ? "/a = always" : ""}] `)).trim();
             rl.close();
-            return /^y/i.test(reply.trim());
+            return canAlways && /^a/i.test(reply) ? "always" : /^y/i.test(reply);
           },
         );
         console.log(answer);
@@ -119,6 +123,7 @@ export async function main(argv: string[]): Promise<number> {
         const { Gateway } = await import("./gateway/gateway.js");
         const app = await App.start(home);
         const stamp = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+        for (const e of app.startupLogs) console.log(`${stamp()} [${e.level}] ${e.message}`);
         app.bus.on("log", (e) => console.log(`${stamp()} [${e.level}] ${e.message}`));
         app.bus.on("config.reloaded", (e) => console.log(`${stamp()} ${e.ok ? "[info] Settings reloaded." : `[error] Settings not applied: ${e.error}`}`));
         const gateway = new Gateway(app);
@@ -251,6 +256,45 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     case "skills": {
+      const sub = rest[0];
+      if (sub && sub !== "list") {
+        const { importSkills, rescanSkill, trustSkill, blockSkill, formatFinding } = await import("./learning/skills.js");
+        const show = (findings: { severity: string }[]) => (findings as any[]).forEach((f) => console.log("  " + formatFinding(f).replace(/\n/g, "\n  ")));
+        const done = async () => {
+          // the files changed outside a turn: record them in the vault history
+          const { default: git } = await import("isomorphic-git");
+          await git.add({ fs, dir: home.vault, filepath: "Skills" }).catch(() => {});
+          await git.commit({ fs, dir: home.vault, message: `Skills: ${rest.join(" ")}`, author: { name: "OpenHermes user", email: "user@openhermes.local" } }).catch(() => {});
+          return 0;
+        };
+        if (sub === "import" && rest[1]) {
+          for (const r of importSkills(home, rest[1])) {
+            console.log(`${r.name}: ${r.trust === "blocked" ? "BLOCKED by the scanner. The agent will not see it." : "imported for review. The agent may read it but not run anything from it."}`);
+            show(r.findings);
+            if (r.trust === "review") console.log(`  Read it in ${home.display(path.join(home.vault, "Skills", r.name))}, then approve with: openhermes skills trust ${r.name}`);
+          }
+          return done();
+        }
+        if (sub === "scan" && rest[1]) {
+          const findings = rescanSkill(home, rest[1]);
+          console.log(findings.length ? `${findings.length} finding(s):` : "Nothing found.");
+          show(findings);
+          return done();
+        }
+        if (sub === "trust" && rest[1]) {
+          const findings = trustSkill(home, rest[1], values.force);
+          console.log(`'${rest[1]}' is now trusted as it is. If its files change, it goes back under review.`);
+          show(findings);
+          return done();
+        }
+        if (sub === "block" && rest[1]) {
+          blockSkill(home, rest[1]);
+          console.log(`'${rest[1]}' is blocked. The agent will not see it.`);
+          return done();
+        }
+        throw new Error("Use: openhermes skills [list] | import <folder> | scan <name> | trust <name> [--force] | block <name>");
+      }
+      const { effectiveTrust } = await import("./learning/scanner.js");
       const { readUsage } = await import("./learning/curator.js");
       const { bodyHash } = await import("./learning/proposals.js");
       const { parseNote } = await import("./vault/frontmatter.js");
@@ -262,8 +306,14 @@ export async function main(argv: string[]): Promise<number> {
         const { data, body } = parseNote<Record<string, any>>(fs.readFileSync(path.join(dir, n, "SKILL.md"), "utf8"));
         const prov = data.provenance ?? {};
         const edited = prov.hash && prov.hash !== bodyHash(body) ? ", edited by hand since" : "";
-        const source = prov.source === "self" ? `written by the agent (${prov.approved_by === "user" ? "you approved it" : "allowed by policy"}${edited})` : "written by you";
-        console.log(`${n}\n  ${data.description ?? ""}\n  ${source}; trust: ${data.trust ?? "trusted"}; used ${usage[n]?.uses ?? 0} time(s)\n`);
+        const trust = effectiveTrust(path.join(dir, n, "SKILL.md"));
+        const source =
+          prov.source === "self"
+            ? `written by the agent (${prov.approved_by === "user" ? "you approved it" : "allowed by policy"}${edited})`
+            : prov.source === "import"
+              ? `imported from ${prov.imported_from}${data.trust === "trusted" && trust === "review" ? " (changed since you approved it)" : ""}`
+              : "written by you";
+        console.log(`${n}\n  ${data.description ?? ""}\n  ${source}; trust: ${trust}; used ${usage[n]?.uses ?? 0} time(s)\n`);
       }
       const archived = fs.existsSync(path.join(dir, "_archive")) ? fs.readdirSync(path.join(dir, "_archive")) : [];
       if (archived.length) console.log(`Archived (in Skills/_archive): ${archived.join(", ")}`);
@@ -423,6 +473,16 @@ export async function main(argv: string[]): Promise<number> {
       } else {
         line(!!findServerBinary(home), "local model server installed in runtime/llama");
         line(!!findModelFile(home, config), "model file present in models/");
+      }
+      {
+        const app = await App.start(home, { watch: false });
+        const problem = await app.backend.check();
+        line(!problem, problem ? `commands (${app.backend.name}): ${problem}` : `commands run ${app.backend.name === "local" ? "on this computer, without a sandbox" : `in the ${app.backend.name} backend`}`);
+        for (const name of [...config.plugins, ...config.external_plugins.map((p) => p.name)]) {
+          const failure = app.startupLogs.find((e) => e.level === "error" && e.message.startsWith(`plugin '${name}'`));
+          line(!failure, failure ? failure.message : `plugin '${name}' loaded`);
+        }
+        await app.stop();
       }
       const probe = path.join(home.data, ".write-test");
       try {

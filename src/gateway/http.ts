@@ -10,7 +10,7 @@ const MAX_BODY = 1024 * 1024;
  */
 export class GatewayHttp {
   private server: http.Server;
-  private approvals = new Map<string, (ok: boolean) => void>();
+  private approvals = new Map<string, (ok: boolean | "always") => void>();
 
   constructor(private gateway: Gateway, private token: string) {
     this.server = http.createServer((req, res) => {
@@ -92,7 +92,7 @@ export class GatewayHttp {
         const resolve = this.approvals.get(String(body.id));
         if (!resolve) return json(res, 404, { error: "no such pending approval" });
         this.approvals.delete(String(body.id));
-        resolve(body.approved === true);
+        resolve(body.approved === "always" ? "always" : body.approved === true);
         return json(res, 200, { ok: true });
       }
       case "POST /v1/shutdown":
@@ -138,7 +138,7 @@ export class GatewayHttp {
         agent,
         signal: abort.signal,
         approver: (action, detail) =>
-          new Promise<boolean>((resolve) => {
+          new Promise<boolean | "always">((resolve) => {
             const id = crypto.randomUUID();
             mine.add(id);
             this.approvals.set(id, (ok) => {

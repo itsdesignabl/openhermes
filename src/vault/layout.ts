@@ -72,6 +72,17 @@ memory:
   search_results: 5
 session:
   history_max_chars: 16000
+backend:
+  type: local                 # local | docker | ssh : where shell commands run
+  docker:
+    image: python:3.12-slim
+    network: bridge           # none = commands have no internet access
+    mount_vault: ro           # ro | rw | none : whether commands can see the vault
+  ssh:
+    host: ""
+    user: ""
+hooks: []                     # for example: - { event: tool.before, match: run_command, command: [python, hooks/audit.py] }
+external_plugins: []          # for example: - { name: weather, command: [python, plugins/weather.py] }
 learning:
   enabled: true
   reflect_every_turns: 10     # review a conversation after this many of your messages
@@ -106,6 +117,9 @@ Edit the properties above. Changes are picked up without a restart.
 
 - \`provider\`: which model endpoint to talk to.
 - \`local_model\`: the model file in \`models/\` and how the bundled server runs it.
+- \`backend\`: where shell commands run. \`docker\` runs them in a container that sees only the workspace folder and, read-only, the vault. It needs Docker Desktop. \`ssh\` runs them on another machine.
+- \`hooks\`: programs run before or after a turn or tool call. They start in the \`runtime\` folder, receive JSON on standard input, and can refuse or change the action.
+- \`external_plugins\`: plugins written in any language. See \`docs/PLUGINS.md\` in the program folder.
 - \`learning\`: when the agent reviews conversations for things worth keeping. What it may save on its own is in \`policies.md\`.
 - \`gateway\`: where the always-on process listens. It only accepts connections from this computer.
 - \`channels\`: chat services. Store the bot token with \`openhermes secret set telegram_bot_token\` (or \`discord_bot_token\`), set \`enabled: true\`, and restart the gateway.
@@ -136,6 +150,7 @@ policies:
   skill.edit_executable: ask
   command.allowlisted: auto
   command.other: ask
+  command.sandboxed: ask
   import.user: auto
   import.agent: ask
 command_allowlist:
@@ -157,12 +172,15 @@ Each action is \`auto\` (do it), \`ask\` (ask me first) or \`deny\` (never).
 | \`skill.edit_executable\` | Create or change a skill that contains scripts or commands |
 | \`command.allowlisted\` | Run a command listed in \`command_allowlist\` |
 | \`command.other\` | Run any other command |
+| \`command.sandboxed\` | Run any other command when \`backend.type\` is \`docker\` (used in place of \`command.other\`) |
 | \`import.user\` | Copy in an outside file that you named in your message |
 | \`import.agent\` | Copy in an outside file the agent chose itself |
 
 The same rules apply when the agent reviews a conversation afterwards. Where a rule says \`ask\`, the suggestion is written to the \`Inbox\` folder and waits there until you set its \`status\` to \`approved\` or \`rejected\`.
 
-Writing outside the home folder is always refused and cannot be changed here. The agent can also never edit this file or the notes in \`Inbox\`.
+When asked about a command you can answer "always": that adds the command to \`command_allowlist\` above.
+
+Writing outside the home folder is always refused and cannot be changed here. The agent can also never edit the notes in this \`System\` folder, an agent's \`agent.md\`, or the notes in \`Inbox\`.
 `,
 };
 

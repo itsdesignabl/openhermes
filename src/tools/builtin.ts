@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { PolicyAction } from "../kernel/config.js";
 import { ContainmentError } from "../kernel/home.js";
+import { effectiveTrust } from "../learning/scanner.js";
 import { formatNote } from "../vault/frontmatter.js";
 import { defineTool, type Tool, type ToolContext } from "./types.js";
 
@@ -35,12 +35,19 @@ function hasScripts(dir: string): boolean {
   return fs.readdirSync(dir, { recursive: true }).some((f) => !String(f).toLowerCase().endsWith(".md") && fs.statSync(path.join(dir, String(f))).isFile());
 }
 
-/** The agent may write only to the vault and the workspace, and never to its own policies or history. */
+/**
+ * The agent may write only to the vault and the workspace, and never to the files that control it:
+ * settings and policies (System/), per-agent settings (agent.md), the Inbox, or the vault history.
+ */
 function protectSystem(ctx: ToolContext, abs: string): void {
   const rel = path.relative(ctx.home.root, abs).split(path.sep).join("/");
-  const writable = rel.startsWith("vault/") || rel.startsWith("workspace/");
-  if (!writable || rel === "vault/System/policies.md" || rel.startsWith("vault/.git/") || rel.startsWith("vault/.obsidian/") || rel.startsWith("vault/Inbox/")) {
-    throw new Error(`The agent may not change ${rel}. It can write to the vault and to workspace/ only.`);
+  const lower = rel.toLowerCase();
+  const writable = lower.startsWith("vault/") || lower.startsWith("workspace/");
+  const controlled =
+    lower.startsWith("vault/system/") || lower.startsWith("vault/inbox/") || lower.startsWith("vault/.git/") || lower.startsWith("vault/.obsidian/") ||
+    /^vault\/agents\/[^/]+\/agent\.md$/.test(lower);
+  if (!writable || controlled) {
+    throw new Error(`The agent may not change ${rel}. Ask the user to edit it.`);
   }
 }
 
@@ -208,36 +215,30 @@ function measure(p: string): { bytes: number; files: number } {
   return { bytes, files };
 }
 
+/** A skill that has not been approved may be read, but nothing from its folder may be run. */
+function unapprovedSkillIn(ctx: ToolContext, command: string): string | null {
+  const dir = path.join(ctx.home.vault, "Skills");
+  if (!fs.existsSync(dir)) return null;
+  const text = command.replace(/\\/g, "/").toLowerCase();
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !text.includes(`skills/${entry.name.toLowerCase()}`)) continue;
+    if (effectiveTrust(path.join(dir, entry.name, "SKILL.md")) !== "trusted") return entry.name;
+  }
+  return null;
+}
+
 const runCommand = defineTool({
   name: "run_command",
   description:
-    "Run a shell command. It starts in the workspace folder inside the home folder. Use it for scripts and programs; use the file tools for reading and writing files.",
+    "Run a shell command. It starts in the workspace folder. Use it for scripts and programs; use the file tools for reading and writing files.",
   schema: z.object({ command: z.string().min(1), timeout_s: z.number().min(1).max(600).default(60) }),
   async run({ command, timeout_s }, ctx) {
-    const action: PolicyAction = ctx.policy.isAllowlisted(command) ? "command.allowlisted" : "command.other";
-    await ctx.policy.check(action, `run: ${command}`);
-    fs.mkdirSync(ctx.home.workspace, { recursive: true });
-    return await new Promise<string>((resolve) => {
-      const child = spawn(command, { cwd: ctx.home.workspace, shell: true, windowsHide: true, env: { ...process.env, OPENHERMES_HOME: ctx.home.root } });
-      let out = "";
-      const add = (d: Buffer) => {
-        if (out.length < 200_000) out += d.toString();
-      };
-      child.stdout.on("data", add);
-      child.stderr.on("data", add);
-      const timer = setTimeout(() => {
-        child.kill();
-        out += `\n[stopped: exceeded ${timeout_s}s]`;
-      }, timeout_s * 1000);
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        resolve(`Could not start the command: ${err.message}`);
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve(`exit code ${code ?? "none"}\n${out.trim() || "(no output)"}`);
-      });
-    });
+    const blocked = unapprovedSkillIn(ctx, command);
+    if (blocked) throw new Error(`The skill '${blocked}' has not been approved by the user, so nothing from its folder may be run. Tell the user; they can approve it with: openhermes skills trust ${blocked}`);
+    const action: PolicyAction = ctx.policy.isAllowlisted(command) ? "command.allowlisted" : ctx.backend.sandboxed ? "command.sandboxed" : "command.other";
+    await ctx.policy.check(action, `run${ctx.backend.name === "local" ? "" : ` (${ctx.backend.name})`}: ${command}`, command);
+    const result = await ctx.backend.run(command, timeout_s);
+    return `exit code ${result.code ?? "none"}\n${result.output || "(no output)"}`;
   },
 });
 

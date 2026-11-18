@@ -82,6 +82,53 @@ export const ConfigSchema = z.object({
       history_max_chars: z.number().default(16000),
     })
     .prefault({}),
+  backend: z
+    .object({
+      /** Where shell commands run: on this computer, in a Docker container, or on another machine. */
+      type: z.string().default("local"),
+      docker: z
+        .object({
+          binary: z.string().default("docker"),
+          image: z.string().default("python:3.12-slim"),
+          /** "bridge" allows internet access from the container, "none" forbids it. */
+          network: z.string().default("bridge"),
+          /** Whether commands can see the vault: "ro" (read only), "rw", or "none". */
+          mount_vault: z.enum(["ro", "rw", "none"]).default("ro"),
+          memory: z.string().default("2g"),
+          cpus: z.number().default(2),
+          pids_limit: z.number().default(512),
+          extra_args: z.array(z.string()).default([]),
+        })
+        .prefault({}),
+      ssh: z
+        .object({
+          binary: z.string().default("ssh"),
+          host: z.string().default(""),
+          user: z.string().default(""),
+          port: z.number().default(22),
+          identity_file: z.string().default(""),
+          workdir: z.string().default("openhermes-workspace"),
+          extra_args: z.array(z.string()).default([]),
+        })
+        .prefault({}),
+    })
+    .prefault({}),
+  /** Programs run at fixed points; see System/config.md. */
+  hooks: z
+    .array(
+      z.object({
+        event: z.enum(["turn.before", "turn.after", "tool.before", "tool.after"]),
+        /** For tool events: only this tool. */
+        match: z.string().optional(),
+        command: z.array(z.string()).min(1),
+        timeout_s: z.number().default(15),
+      }),
+    )
+    .default([]),
+  /** Plugins that run as separate programs and speak JSON over stdin/stdout. */
+  external_plugins: z
+    .array(z.object({ name: z.string(), command: z.array(z.string()).min(1), timeout_s: z.number().default(60) }))
+    .default([]),
   learning: z
     .object({
       enabled: z.boolean().default(true),
@@ -141,6 +188,8 @@ export const PoliciesSchema = z.object({
       "skill.edit_executable": PolicyValue.default("ask"),
       "command.allowlisted": PolicyValue.default("auto"),
       "command.other": PolicyValue.default("ask"),
+      /** A command that is not on the allowlist, when commands run in the Docker sandbox. */
+      "command.sandboxed": PolicyValue.default("ask"),
       "import.user": PolicyValue.default("auto"),
       "import.agent": PolicyValue.default("ask"),
     })

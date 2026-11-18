@@ -8,6 +8,7 @@ import { consolidateMemory, curate, type CuratorReport } from "./curator.js";
 import { createInboxNote, findPending, inboxDir, listInbox, readInboxNote, resolveInboxItem, type InboxItem, type Resolution } from "./inbox.js";
 import { applyProposal, describe, memoryLimit, policyActionFor, ProposalError, type Proposal, type ProposalOrigin } from "./proposals.js";
 import { reflect, renderTranscript } from "./reflect.js";
+import { scanText } from "./scanner.js";
 
 export interface ReflectionOutcome {
   session: string;
@@ -141,6 +142,13 @@ export class Learner {
     const waiting = new Set(listInbox(this.app.home).filter((i) => i.status === "pending").map((i) => i.title));
     for (const p of proposals) {
       const title = describe(p);
+      // a skill the agent drafts is held to the same checks as an imported one
+      const text = p.kind === "skill.create" ? p.body : p.kind === "skill.patch" ? p.new_text : "";
+      const blocked = text ? scanText(text, "SKILL.md").find((f) => f.severity === "block") : undefined;
+      if (blocked) {
+        outcome.skipped.push(`${title} (the skill scanner blocks it: ${blocked.rule})`);
+        continue;
+      }
       const action = policyActionFor(this.app.home, p);
       const rule = this.app.policies.policies[action];
       if (rule === "deny") {

@@ -11,7 +11,7 @@ type Item =
 interface Pending {
   action: string;
   detail: string;
-  resolve: (ok: boolean) => void;
+  resolve: (ok: boolean | "always") => void;
 }
 
 const HELP = [
@@ -55,7 +55,7 @@ function Chat({ app }: { app: Backend }) {
       push({ kind: "tool", name: e.name, args: "", ok: e.ok, summary: e.summary });
     } else if (e.type === "log") push({ kind: e.level === "error" ? "error" : "info", text: e.message });
   };
-  const ask = (action: string, detail: string) => new Promise<boolean>((resolve) => setPending({ action, detail, resolve }));
+  const ask = (action: string, detail: string) => new Promise<boolean | "always">((resolve) => setPending({ action, detail, resolve }));
 
   const submit = async (text: string) => {
     if (text.startsWith("/")) return command(text);
@@ -116,9 +116,10 @@ function Chat({ app }: { app: Backend }) {
     }
     if (pending) {
       const answer = ch.toLowerCase();
-      if (answer === "y" || answer === "n" || key.escape) {
-        pending.resolve(answer === "y");
-        push({ kind: "info", text: `${answer === "y" ? "Allowed" : "Declined"}: ${pending.detail}` });
+      const canAlways = pending.action.startsWith("command.");
+      if (answer === "y" || answer === "n" || key.escape || (answer === "a" && canAlways)) {
+        pending.resolve(answer === "y" ? true : answer === "a" ? "always" : false);
+        push({ kind: "info", text: `${answer === "y" ? "Allowed" : answer === "a" ? "Allowed from now on" : "Declined"}: ${pending.detail}` });
         setPending(null);
       }
       return;
@@ -147,7 +148,7 @@ function Chat({ app }: { app: Backend }) {
           <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
             <Text color="yellow" bold>Approval needed ({pending.action})</Text>
             <Text>{pending.detail}</Text>
-            <Text dimColor>y = allow · n = decline</Text>
+            <Text dimColor>y = allow · n = decline{pending.action.startsWith("command.") ? " · a = always allow this command" : ""}</Text>
           </Box>
         ) : busy ? (
           <Text dimColor>working… (Esc to stop)</Text>

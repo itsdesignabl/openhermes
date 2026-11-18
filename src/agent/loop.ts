@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Bus } from "../kernel/bus.js";
 import type { ChatMessage, Provider, ToolSpec } from "../provider/openai.js";
+import type { HookRunner } from "../hooks/runner.js";
 import type { Tool, ToolContext } from "../tools/types.js";
 
 export interface TurnOptions {
@@ -15,6 +16,9 @@ export interface TurnOptions {
   maxSteps: number;
   maxToolOutputChars: number;
   signal?: AbortSignal;
+  hooks?: HookRunner;
+  /** Extra fields given to hooks, such as the agent and conversation. */
+  hookInfo?: Record<string, unknown>;
 }
 
 export interface TurnResult {
@@ -27,6 +31,7 @@ export interface TurnResult {
 
 export function toolSpecs(tools: Tool<any>[]): ToolSpec[] {
   return tools.map((t) => {
+    if (t.jsonSchema) return { name: t.name, description: t.description, parameters: t.jsonSchema };
     const { $schema, ...parameters } = z.toJSONSchema(t.schema, { io: "input" }) as Record<string, unknown>;
     return { name: t.name, description: t.description, parameters };
   });
@@ -76,10 +81,21 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
           throw new Error("Arguments were not valid JSON.");
         }
         await o.bus.emit("tool.requested", { sessionId: o.sessionId, id: call.id, name: call.name, args });
-        const parsed = tool.schema.safeParse(args);
+        let parsed = tool.schema.safeParse(args);
         if (!parsed.success) throw new Error("Invalid arguments: " + z.prettifyError(parsed.error));
+        if (o.hooks) {
+          const h = await o.hooks.run("tool.before", { ...o.hookInfo, tool: call.name, args: parsed.data });
+          if (h.args !== undefined) {
+            parsed = tool.schema.safeParse(h.args);
+            if (!parsed.success) throw new Error("A hook changed the arguments into something invalid: " + z.prettifyError(parsed.error));
+          }
+        }
         output = await tool.run(parsed.data, o.toolContext);
         toolsUsed.push(call.name);
+        if (o.hooks) {
+          const h = await o.hooks.run("tool.after", { ...o.hookInfo, tool: call.name, args: parsed.data, output, ok: true });
+          if (typeof h.output === "string") output = h.output;
+        }
       } catch (err) {
         ok = false;
         output = `Error: ${(err as Error).message}`;

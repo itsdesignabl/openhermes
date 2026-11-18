@@ -205,6 +205,8 @@ export function stampSkill(file: string, origin: ProposalOrigin): void {
   const note = parseNote<Record<string, any>>(text);
   const now = new Date().toISOString();
   const prev = note.data.provenance as Record<string, unknown> | undefined;
+  // an imported skill is never re-blessed by the agent: an edit puts it back under review until the user approves it again
+  if (prev?.source === "import") return;
   const hash = bodyHash(note.body);
   if (prev?.hash === hash) return;
   const provenance = prev

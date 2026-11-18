@@ -306,7 +306,7 @@ test("a user plugin from runtime/plugins can add a tool; a broken one is reporte
     const provider = new ScriptedProvider([{ calls: [{ name: "roll_dice", args: { sides: 6 } }] }, { content: "ok" }]);
     const app = await App.start(home, { provider, watch: false });
     try {
-      assert.deepEqual(app.registry.loaded, ["core-tools", "core-channels", "dice"]);
+      assert.deepEqual(app.registry.loaded, ["core-tools", "core-backends", "core-channels", "dice"]);
       await app.send("roll");
       assert.equal(provider.lastToolOutputs()[0], "rolled a 6");
     } finally {

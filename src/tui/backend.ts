@@ -10,7 +10,7 @@ export type UiEvent =
   | { type: "tool_finished"; name: string; ok: boolean; summary: string }
   | { type: "log"; level: string; message: string };
 
-export type Ask = (action: string, detail: string) => Promise<boolean>;
+export type Ask = (action: string, detail: string) => Promise<boolean | "always">;
 
 /** What `chat` and `ask` need from the agent, whether it runs in this process or in the gateway. */
 export interface Backend {
@@ -59,6 +59,7 @@ class LocalBackend implements Backend {
   async curate() { return (await this.app.learner.curate()).actions; }
   reflect(file: string) { return this.app.learner.reflectNote(file); }
   onNotice(fn: (level: string, message: string) => void) {
+    for (const e of this.app.startupLogs) if (e.level !== "info") fn(e.level, e.message);
     this.app.bus.on("proposal.created", (e) => fn("info", `Waiting for your approval: ${e.title}  (/approve ${e.id} or /reject ${e.id})`));
     this.app.bus.on("log", (e) => fn(e.level, e.message));
     this.app.bus.on("config.reloaded", (e) =>

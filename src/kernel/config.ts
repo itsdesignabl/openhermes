@@ -82,6 +82,24 @@ export const ConfigSchema = z.object({
       history_max_chars: z.number().default(16000),
     })
     .prefault({}),
+  learning: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** Review a conversation after this many of the user's messages. */
+      reflect_every_turns: z.number().default(10),
+      /** Review a conversation that has been quiet this long (while the gateway runs). 0 turns it off. */
+      reflect_idle_minutes: z.number().default(30),
+      /** Conversations shorter than this are not reviewed when they end. */
+      min_turns: z.number().default(2),
+      max_transcript_chars: z.number().default(12000),
+      /** How often the cleanup runs while the gateway runs. "0m" turns it off. */
+      curator_every: z.string().default("24h"),
+      /** Skills the agent wrote itself and has not used for this long are moved to Skills/_archive. 0 turns it off. */
+      archive_unused_days: z.number().default(60),
+      /** Tell me in chat when something is waiting in the Inbox. */
+      notify: z.boolean().default(true),
+    })
+    .prefault({}),
   gateway: z
     .object({
       host: z.string().default("127.0.0.1"),

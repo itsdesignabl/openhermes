@@ -39,7 +39,7 @@ function hasScripts(dir: string): boolean {
 function protectSystem(ctx: ToolContext, abs: string): void {
   const rel = path.relative(ctx.home.root, abs).split(path.sep).join("/");
   const writable = rel.startsWith("vault/") || rel.startsWith("workspace/");
-  if (!writable || rel === "vault/System/policies.md" || rel.startsWith("vault/.git/") || rel.startsWith("vault/.obsidian/")) {
+  if (!writable || rel === "vault/System/policies.md" || rel.startsWith("vault/.git/") || rel.startsWith("vault/.obsidian/") || rel.startsWith("vault/Inbox/")) {
     throw new Error(`The agent may not change ${rel}. It can write to the vault and to workspace/ only.`);
   }
 }
@@ -55,6 +55,7 @@ const readFile = defineTool({
     if (!fs.existsSync(abs)) throw new Error(`No such file: ${p}`);
     if (fs.statSync(abs).isDirectory()) throw new Error(`${p} is a folder. Use list_files.`);
     const text = fs.readFileSync(abs, "utf8");
+    ctx.read?.(abs);
     return text.length > MAX_READ ? text.slice(0, MAX_READ) + `\n\n[truncated: file is ${text.length} characters]` : text;
   },
 });

@@ -17,16 +17,23 @@ export class Session {
   id!: string;
   file!: string;
   history: ChatMessage[] = [];
+  /** How much of the history the learning loop has already reviewed. */
+  reflected = 0;
+  lastActive = Date.now();
+  private persisted = false;
   private stateFile: string;
 
   constructor(private home: Home, readonly key: string, readonly agentName: string, opts: { resume?: boolean } = {}) {
     this.stateFile = path.join(home.data, "sessions", `${safe(key)}.json`);
     if (opts.resume && fs.existsSync(this.stateFile)) {
       try {
-        const state = JSON.parse(fs.readFileSync(this.stateFile, "utf8")) as { id: string; file: string; history: ChatMessage[] };
+        const state = JSON.parse(fs.readFileSync(this.stateFile, "utf8")) as { id: string; file: string; history: ChatMessage[]; reflected?: number; lastActive?: number };
         this.id = state.id;
         this.file = home.resolveInside(state.file, home.vault);
         this.history = state.history;
+        this.reflected = Math.min(state.reflected ?? 0, state.history.length);
+        this.lastActive = state.lastActive ?? Date.now();
+        this.persisted = true;
         return;
       } catch {
         // unreadable state: start a new conversation
@@ -44,7 +51,21 @@ export class Session {
     for (let i = 2; fs.existsSync(file); i++) file = path.join(this.home.vault, "Sessions", `${this.id}-${i}.md`);
     this.file = file;
     this.history = [];
+    this.reflected = 0;
     fs.rmSync(this.stateFile, { force: true });
+  }
+
+  markReflected(): void {
+    this.reflected = this.history.length;
+    if (this.persisted) this.save();
+  }
+
+  private save(): void {
+    fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
+    const state = { id: this.id, file: path.relative(this.home.vault, this.file), history: this.history, reflected: this.reflected, lastActive: this.lastActive };
+    const tmp = this.stateFile + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, this.stateFile);
   }
 
   append(messages: ChatMessage[], persist: boolean): void {
@@ -62,12 +83,10 @@ export class Session {
       } else if (m.role === "tool") lines.push(`> result: ${truncate(m.content.split("\n")[0] ?? "", 300)}\n`);
     }
     fs.appendFileSync(this.file, lines.join(""));
+    this.lastActive = Date.now();
     if (persist) {
-      fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
-      const state = { id: this.id, file: path.relative(this.home.vault, this.file), history: this.history };
-      const tmp = this.stateFile + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(state));
-      fs.renameSync(tmp, this.stateFile);
+      this.persisted = true;
+      this.save();
     }
   }
 }

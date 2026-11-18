@@ -3,12 +3,13 @@ import path from "node:path";
 
 /**
  * Watches the vault for changes made outside the agent (for example in Obsidian).
- * Events are debounced per file. Paths the agent itself just wrote are reported as "agent".
+ * Events are debounced per file. A file that is unchanged since the agent wrote it is reported as "agent".
  */
 export class VaultWatcher {
   private watcher?: fs.FSWatcher;
   private timers = new Map<string, NodeJS.Timeout>();
-  private agentWrites = new Map<string, number>();
+  /** What each file looked like right after the agent last wrote it. */
+  private agentWrites = new Map<string, string>();
 
   constructor(
     private dir: string,
@@ -27,9 +28,9 @@ export class VaultWatcher {
         abs,
         setTimeout(() => {
           this.timers.delete(abs);
-          const stamp = this.agentWrites.get(abs);
-          const byAgent = stamp !== undefined && Date.now() - stamp < 2000;
-          if (byAgent) this.agentWrites.delete(abs);
+          // the change is the agent's own if the file still looks exactly as the agent left it
+          const byAgent = this.agentWrites.get(abs) === fingerprint(abs);
+          if (!byAgent) this.agentWrites.delete(abs);
           this.onChange(abs, byAgent ? "agent" : "user");
         }, this.debounceMs),
       );
@@ -38,12 +39,21 @@ export class VaultWatcher {
   }
 
   markAgentWrite(absPath: string): void {
-    this.agentWrites.set(absPath, Date.now());
+    this.agentWrites.set(absPath, fingerprint(absPath));
   }
 
   stop(): void {
     this.watcher?.close();
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+  }
+}
+
+function fingerprint(file: string): string {
+  try {
+    const st = fs.statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return "gone";
   }
 }

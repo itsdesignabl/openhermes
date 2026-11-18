@@ -21,9 +21,16 @@ export class GatewayClient {
     return (await res.json()) as T;
   }
 
-  async post<T = any>(path: string, body: unknown = {}): Promise<T> {
-    const res = await fetch(this.url + path, { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
-    if (!res.ok) throw new Error(`Gateway answered ${res.status}: ${await res.text()}`);
+  async post<T = any>(path: string, body: unknown = {}, timeoutMs = 10000): Promise<T> {
+    const res = await fetch(this.url + path, { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      const text = await res.text();
+      let message = `Gateway answered ${res.status}: ${text}`;
+      try {
+        message = JSON.parse(text).error ?? message;
+      } catch {}
+      throw new Error(message);
+    }
     return (await res.json()) as T;
   }
 

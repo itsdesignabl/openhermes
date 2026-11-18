@@ -61,6 +61,27 @@ export class GatewayHttp {
         return json(res, 200, { entries: (await app.history.log(8)).map((e) => ({ date: e.date.toISOString(), message: e.message })) });
       case "GET /v1/policies":
         return json(res, 200, { policies: app.policies.policies });
+      case "GET /v1/inbox":
+        return json(res, 200, { items: app.learner.pending().map((i) => ({ id: i.id, title: i.title, created: i.created })) });
+      case "POST /v1/inbox/resolve": {
+        const body = await readBody(req);
+        try {
+          const r = await app.learner.resolve(String(body.ref ?? ""), body.approve === true);
+          return json(res, 200, { outcome: r.outcome, message: r.message });
+        } catch (err) {
+          return json(res, 404, { error: (err as Error).message });
+        }
+      }
+      case "POST /v1/curate":
+        return json(res, 200, { actions: (await app.learner.curate()).actions });
+      case "POST /v1/reflect": {
+        const body = await readBody(req);
+        try {
+          return json(res, 200, await app.learner.reflectNote(String(body.file ?? "")));
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+      }
       case "POST /v1/new": {
         const body = await readBody(req);
         app.newSession(typeof body.conversation === "string" ? body.conversation : undefined);

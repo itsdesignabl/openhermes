@@ -14,6 +14,8 @@ export interface ToolContext {
   userText: string;
   /** Call after every write inside the home folder, so it is indexed and versioned. */
   wrote(absPath: string): void;
+  /** Call after reading a file, so skill use can be counted. */
+  read?(absPath: string): void;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

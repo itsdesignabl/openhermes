@@ -17,6 +17,9 @@ import { DiscordChannel } from "./channels/discord.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import { builtinTools } from "./tools/builtin.js";
 import type { ToolContext } from "./tools/types.js";
+import { Learner } from "./learning/learner.js";
+import { recordSkillUse } from "./learning/curator.js";
+import { stampSkill } from "./learning/proposals.js";
 import { VaultHistory } from "./vault/git.js";
 import { VaultWatcher } from "./vault/watcher.js";
 
@@ -66,6 +69,7 @@ export class App {
   registry!: Registry;
   memory!: MemoryIndex;
   history!: VaultHistory;
+  learner!: Learner;
   private sessions = new Map<string, Session>();
   private watcher?: VaultWatcher;
   private localModel: LocalModel;
@@ -87,6 +91,8 @@ export class App {
     app.memory.sync();
     app.history = new VaultHistory(home.vault);
     await app.history.init();
+    app.learner = new Learner(app);
+    void app.learner.scanInbox().catch(() => {});
     if (opts.watch !== false) {
       app.watcher = new VaultWatcher(home.vault, (abs, by) => void app.onFileChanged(abs, by));
       app.watcher.start();
@@ -101,6 +107,8 @@ export class App {
       // a file that vanished or is mid-write is picked up by the next change event
     }
     if (abs === configPath(this.home) || abs === policiesPath(this.home)) this.reloadConfig();
+    // a decision typed into an Inbox note in Obsidian
+    if (by === "user" && path.dirname(abs) === path.join(this.home.vault, "Inbox")) void this.learner.scanInbox().catch(() => {});
     await this.bus.emit("file.changed", { path: abs, by });
   }
 
@@ -175,14 +183,72 @@ export class App {
   }
 
   newSession(key: string = this.defaultAgent + LOCAL_SUFFIX): void {
-    this.conversation(key).reset();
+    const session = this.conversation(key);
+    this.learner.beforeReset(session);
+    session.reset();
+  }
+
+  conversations(): Session[] {
+    return [...this.sessions.values()];
+  }
+
+  /** Runs `fn` when no turn or other background work is running. Everything that writes the vault goes through here. */
+  enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  /** Call after writing a file in the home folder, so it is indexed, versioned and not mistaken for a user edit. */
+  recordWrite(abs: string): void {
+    this.watcher?.markAgentWrite(abs);
+    this.history.touch(abs);
+    try {
+      this.memory.update(abs);
+    } catch {
+      // indexing is best effort; the next sync repairs it
+    }
+  }
+
+  toolContext(agent: string, userText: string, approver: Approver | undefined, sessionId = "", sessionFile = ""): ToolContext {
+    const policy = new PolicyEngine(
+      () => this.policies,
+      async (action, detail) => {
+        await this.bus.emit("approval.requested", { sessionId, action, detail });
+        const approved = approver ? await approver(action, detail) : false;
+        await this.bus.emit("approval.resolved", { sessionId, action, approved });
+        return approved;
+      },
+    );
+    const skillPath = /^Skills\/([^/]+)\/SKILL\.md$/i;
+    return {
+      home: this.home,
+      config: () => this.config,
+      policy,
+      memory: this.memory,
+      agentName: agent,
+      userText,
+      wrote: (abs) => {
+        const rel = path.relative(this.home.vault, abs).split(path.sep).join("/");
+        if (skillPath.test(rel)) {
+          try {
+            stampSkill(abs, { agent, session: sessionFile });
+          } catch {
+            // a skill file without readable properties is left as the agent wrote it
+          }
+        }
+        this.recordWrite(abs);
+      },
+      read: (abs) => {
+        const m = skillPath.exec(path.relative(this.home.vault, abs).split(path.sep).join("/"));
+        if (m) recordSkillUse(this.home, m[1]!);
+      },
+    };
   }
 
   send(text: string, options: SendOptions | AbortSignal = {}): Promise<TurnResult> {
     const o: SendOptions = options instanceof AbortSignal ? { signal: options } : options;
-    const run = this.queue.then(() => this.turn(text, o));
-    this.queue = run.catch(() => {});
-    return run;
+    return this.enqueue(() => this.turn(text, o));
   }
 
   private async turn(text: string, o: SendOptions): Promise<TurnResult> {
@@ -190,33 +256,8 @@ export class App {
     const agent = session.agentName;
     const settings = this.agentSettings(agent);
     const provider = await this.getProvider(agent);
-    const ask = o.approver ?? this.opts.approver;
-    const policy = new PolicyEngine(
-      () => this.policies,
-      async (action, detail) => {
-        await this.bus.emit("approval.requested", { sessionId: session.id, action, detail });
-        const approved = ask ? await ask(action, detail) : false;
-        await this.bus.emit("approval.resolved", { sessionId: session.id, action, approved });
-        return approved;
-      },
-    );
-    const ctx: ToolContext = {
-      home: this.home,
-      config: () => this.config,
-      policy,
-      memory: this.memory,
-      agentName: agent,
-      userText: text,
-      wrote: (abs) => {
-        this.watcher?.markAgentWrite(abs);
-        this.history.touch(abs);
-        try {
-          this.memory.update(abs);
-        } catch {
-          // indexing is best effort; the next sync repairs it
-        }
-      },
-    };
+    const sessionFile = path.relative(this.home.vault, session.file).split(path.sep).join("/");
+    const ctx = this.toolContext(agent, text, o.approver ?? this.opts.approver, session.id, sessionFile);
     let tools = [...this.registry.tools.values()];
     if (settings.tools) tools = tools.filter((t) => settings.tools!.includes(t.name));
     const system = buildSystemPrompt(this.home, agent) + (o.systemNote ? `\n\n${o.systemNote}` : "");
@@ -235,9 +276,8 @@ export class App {
         signal: o.signal,
       });
       session.append(result.messages, o.persist ?? false);
-      this.watcher?.markAgentWrite(session.file);
-      this.history.touch(session.file);
-      this.memory.update(session.file);
+      this.recordWrite(session.file);
+      this.learner.afterTurn(session);
       return result;
     } finally {
       // files written before a failure are still recorded in the history

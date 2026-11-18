@@ -72,6 +72,13 @@ memory:
   search_results: 5
 session:
   history_max_chars: 16000
+learning:
+  enabled: true
+  reflect_every_turns: 10     # review a conversation after this many of your messages
+  reflect_idle_minutes: 30    # ... or once it has been quiet this long (gateway only)
+  curator_every: 24h          # tidy memory and skills this often (gateway only)
+  archive_unused_days: 60     # archive skills the agent wrote and has not used this long
+  notify: true                # tell me in chat when something waits in the Inbox
 gateway:
   host: 127.0.0.1
   port: 18789
@@ -99,6 +106,7 @@ Edit the properties above. Changes are picked up without a restart.
 
 - \`provider\`: which model endpoint to talk to.
 - \`local_model\`: the model file in \`models/\` and how the bundled server runs it.
+- \`learning\`: when the agent reviews conversations for things worth keeping. What it may save on its own is in \`policies.md\`.
 - \`gateway\`: where the always-on process listens. It only accepts connections from this computer.
 - \`channels\`: chat services. Store the bot token with \`openhermes secret set telegram_bot_token\` (or \`discord_bot_token\`), set \`enabled: true\`, and restart the gateway.
 - \`routing\`: which agent answers which chat. The first matching binding wins.
@@ -152,7 +160,9 @@ Each action is \`auto\` (do it), \`ask\` (ask me first) or \`deny\` (never).
 | \`import.user\` | Copy in an outside file that you named in your message |
 | \`import.agent\` | Copy in an outside file the agent chose itself |
 
-Writing outside the home folder is always refused and cannot be changed here.
+The same rules apply when the agent reviews a conversation afterwards. Where a rule says \`ask\`, the suggestion is written to the \`Inbox\` folder and waits there until you set its \`status\` to \`approved\` or \`rejected\`.
+
+Writing outside the home folder is always refused and cannot be changed here. The agent can also never edit this file or the notes in \`Inbox\`.
 `,
 };
 

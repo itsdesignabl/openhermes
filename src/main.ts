@@ -28,6 +28,11 @@ const HELP = `openhermes <command> [options]
   pair approve <code>      Approve a pairing code someone received from the bot
   pair revoke <channel:id> Remove someone's access
   secret set <name>        Store a bot token or API key (also: list, remove <name>)
+  inbox                    What the agent wants to keep and is waiting for you to approve
+  inbox approve <id>       Approve it (also: inbox reject <id>, inbox show <id>)
+  reflect [session note]   Review a conversation now for things worth keeping (default: the latest)
+  curate                   Tidy memory and archive unused skills now
+  skills                   List skills with where they came from and how often they were used
   eval [--only <text>]     Run the tool-calling test against the configured model
   history                  Show the agent's recent changes to the vault
   doctor                   Check the installation
@@ -179,6 +184,90 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       throw new Error("Use: openhermes gateway run | start | stop | status");
+    }
+
+    case "inbox": {
+      const { listInbox, findPending } = await import("./learning/inbox.js");
+      const sub = rest[0] ?? "list";
+      if (sub === "list") {
+        const pending = listInbox(home).filter((i) => i.status === "pending");
+        if (!pending.length) console.log("Nothing is waiting for approval.");
+        for (const i of pending) console.log(`${i.id}  ${i.title}`);
+        if (pending.length) console.log(`\nApprove with: openhermes inbox approve <id>   (or set status in the note in ${home.display(path.join(home.vault, "Inbox"))})`);
+        return 0;
+      }
+      if (sub === "show") {
+        const item = rest[1] ? findPending(home, rest[1]) : undefined;
+        if (!item) throw new Error("Nothing is waiting under that id. See: openhermes inbox");
+        console.log(fs.readFileSync(item.file, "utf8"));
+        return 0;
+      }
+      if ((sub === "approve" || sub === "reject") && rest[1]) {
+        const { openBackend } = await import("./tui/backend.js");
+        const backend = await openBackend(home);
+        try {
+          console.log(await backend.resolve(rest[1], sub === "approve"));
+        } finally {
+          await backend.close();
+        }
+        return 0;
+      }
+      throw new Error("Use: openhermes inbox [list] | show <id> | approve <id> | reject <id>");
+    }
+
+    case "reflect": {
+      let file = rest[0];
+      if (!file) {
+        const dir = path.join(home.vault, "Sessions");
+        const notes = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".md") && !/(heartbeat|job)_/.test(f)).sort() : [];
+        if (!notes.length) throw new Error("There are no saved conversations yet.");
+        file = `Sessions/${notes.at(-1)}`;
+      }
+      const { openBackend } = await import("./tui/backend.js");
+      const backend = await openBackend(home);
+      try {
+        console.log(`Reviewing ${file} ...`);
+        const r = await backend.reflect(file);
+        for (const t of r.applied) console.log(`saved     ${t}`);
+        for (const t of r.pending) console.log(`inbox     ${t}`);
+        for (const t of r.skipped) console.log(`skipped   ${t}`);
+        if (!r.applied.length && !r.pending.length && !r.skipped.length) console.log("Nothing worth keeping.");
+      } finally {
+        await backend.close();
+      }
+      return 0;
+    }
+
+    case "curate": {
+      const { openBackend } = await import("./tui/backend.js");
+      const backend = await openBackend(home);
+      try {
+        const actions = await backend.curate();
+        console.log(actions.length ? actions.join("\n") : "Nothing to tidy.");
+      } finally {
+        await backend.close();
+      }
+      return 0;
+    }
+
+    case "skills": {
+      const { readUsage } = await import("./learning/curator.js");
+      const { bodyHash } = await import("./learning/proposals.js");
+      const { parseNote } = await import("./vault/frontmatter.js");
+      const dir = path.join(home.vault, "Skills");
+      const usage = readUsage(home);
+      const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => !n.startsWith("_") && !n.startsWith(".") && fs.existsSync(path.join(dir, n, "SKILL.md"))) : [];
+      if (!names.length) console.log("No skills yet.");
+      for (const n of names.sort()) {
+        const { data, body } = parseNote<Record<string, any>>(fs.readFileSync(path.join(dir, n, "SKILL.md"), "utf8"));
+        const prov = data.provenance ?? {};
+        const edited = prov.hash && prov.hash !== bodyHash(body) ? ", edited by hand since" : "";
+        const source = prov.source === "self" ? `written by the agent (${prov.approved_by === "user" ? "you approved it" : "allowed by policy"}${edited})` : "written by you";
+        console.log(`${n}\n  ${data.description ?? ""}\n  ${source}; trust: ${data.trust ?? "trusted"}; used ${usage[n]?.uses ?? 0} time(s)\n`);
+      }
+      const archived = fs.existsSync(path.join(dir, "_archive")) ? fs.readdirSync(path.join(dir, "_archive")) : [];
+      if (archived.length) console.log(`Archived (in Skills/_archive): ${archived.join(", ")}`);
+      return 0;
     }
 
     case "pair": {

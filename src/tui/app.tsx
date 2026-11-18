@@ -20,6 +20,8 @@ const HELP = [
   "/search <text>   search the vault",
   "/history         the agent's recent changes",
   "/policy          current approval settings",
+  "/inbox           what is waiting for your approval",
+  "/approve <id>    approve a waiting item (also /reject <id>)",
   "/quit            exit (also Ctrl+C)",
 ].join("\n");
 
@@ -91,6 +93,17 @@ function Chat({ app }: { app: Backend }) {
     if (cmd === "policy") {
       const p = await app.policies();
       return push({ kind: "info", text: Object.entries(p).map(([k, v]) => `${k.padEnd(24)} ${v}`).join("\n") + "\nEdit vault/System/policies.md to change these." });
+    }
+    if (cmd === "inbox") {
+      const items = await app.inbox();
+      return push({ kind: "info", text: items.length ? items.map((i) => `${i.id}  ${i.title}`).join("\n") + "\n/approve <id> or /reject <id>" : "Nothing is waiting for approval." });
+    }
+    if (cmd === "approve" || cmd === "reject") {
+      try {
+        return push({ kind: "info", text: await app.resolve(arg, cmd === "approve") });
+      } catch (err) {
+        return push({ kind: "error", text: (err as Error).message });
+      }
     }
     push({ kind: "error", text: `Unknown command /${cmd}. Try /help.` });
   };

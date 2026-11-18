@@ -7,7 +7,7 @@ A self-hosted personal AI agent that brings together two open-source approaches:
 
 Everything the agent knows and does lives as Markdown in a local vault you can open in Obsidian, inside one self-contained folder. Delete that folder and the agent and all its data are gone.
 
-**Status:** milestones M0 (kernel and vault) and M1 (gateway, Telegram, Discord, heartbeat, jobs) are built. The learning loop comes in M2; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
+**Status:** milestones M0 (kernel and vault), M1 (gateway, Telegram, Discord, heartbeat, jobs) and M2 (learning loop) are built. Sandboxed commands come in M3; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
 
 ## What works in M0
 
@@ -30,6 +30,15 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 - Jobs: a note in `vault\Jobs\` with a schedule runs on time and sends you the result
 - Approvals in chat: the agent asks in the conversation and waits for yes or no
 - A local control API with a token, used by `chat` and `ask` while the gateway runs
+
+## What M2 adds
+
+- After a conversation the agent reviews it and keeps what is worth keeping: facts about you, notes on people and projects, and step-by-step skills
+- Your policies decide what it may save on its own. By default facts and plain skills are saved, and skills that contain commands or code wait for you
+- Waiting items are notes in `vault\Inbox\`. Approve one by setting `status: approved` in Obsidian, by `/approve <id>` in chat, or by `openhermes inbox approve <id>`. You can edit the proposed text first
+- Every skill records where it came from, who approved it, and how often it is used
+- A cleanup removes repeated memory entries, merges a memory file that is nearly full, and archives skills the agent wrote and no longer uses
+- The agent cannot approve its own suggestions, and passwords or keys are never written to memory
 
 ## Install (Windows)
 
@@ -118,6 +127,10 @@ openhermes ask "what do you remember about my projects?"
 
 | `gateway start`, `stop`, `status` | Run the always-on gateway in the background |
 | `gateway run` | Run it in the current window, with its log on screen |
+| `inbox`, `inbox approve <id>`, `inbox reject <id>` | See and decide what the agent wants to keep |
+| `skills` | List skills with their origin and use count |
+| `reflect [session note]` | Review a conversation now (default: the latest) |
+| `curate` | Run the cleanup now |
 | `pair list`, `approve <code>`, `revoke <id>` | Manage who may talk to the agent |
 | `secret set <name>`, `list`, `remove <name>` | Store bot tokens and API keys |
 
@@ -164,6 +177,22 @@ In group chats and servers the agent answers only when mentioned, and only to pe
 
 Both run only while the gateway is running. Results go to the chat that last spoke to the agent unless the note names another target.
 
+## How it learns
+
+A conversation is reviewed after every 10 of your messages, when you start a new one with `/new`, and, while the gateway runs, once it has been quiet for 30 minutes. Heartbeat and job runs are not reviewed. The review is a separate model call, so it takes model time but does not appear in the chat.
+
+Each thing the review wants to keep is checked against `vault\System\policies.md`:
+
+| Policy value | What happens |
+|---|---|
+| `auto` | Saved straight away |
+| `ask` | Written to `vault\Inbox\` and you are told in your last chat |
+| `deny` | Dropped |
+
+Decided items move to `vault\Inbox\Done\`. Everything the review saves is one commit in the vault history (`openhermes history`), so it can be undone. The timings are under `learning` in `vault\System\config.md`; `enabled: false` turns it off.
+
+Single `openhermes ask` commands without a running gateway are separate one-message conversations and are not reviewed automatically. Use `openhermes reflect` for those.
+
 ## Customize
 
 | To change | Edit |
@@ -185,13 +214,15 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **Nothing has been run against a real model, real Telegram or real Discord.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
 - **Commands are not sandboxed.** File tools are strictly contained, but a shell command the agent runs can touch other paths. Commands not on the allowlist ask for approval first.
+- **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
+- **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
 - **One turn at a time.** Messages from different chats queue behind each other, and a turn waiting for an approval holds the queue until you answer or the time limit (5 minutes by default) passes.
 - **The gateway does not start with Windows.** Run `openhermes gateway start` after logging in.
 - **Missed schedules are not caught up.** A job due while the gateway was off is skipped, except a one-time `at` job less than a day late.
 - **Only text messages** are handled in chats; images, voice and files are ignored.
 - **Keys are stored unencrypted** in `secrets\keys.json`.
 - **Node.js and git are installed outside the home folder.** A portable bundle is planned.
-- Approvals happen in the chat. Approval notes in `Inbox\` arrive with the learning loop in M2.
+- Approvals for actions during a conversation (running a command, importing a file) are still asked live in the chat, not through `Inbox\`.
 
 ## Development
 

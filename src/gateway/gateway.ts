@@ -46,6 +46,7 @@ export class Gateway {
   private lastPeerFile: string;
   private lastPeer: Record<string, string> = {};
   private stopping?: Promise<void>;
+  private maintenance?: NodeJS.Timeout;
   onStopped: () => void = () => {};
 
   constructor(readonly app: App) {
@@ -96,13 +97,18 @@ export class Gateway {
         this.log("error", `${name} did not start: ${(err as Error).message}`);
       });
     }
-    if (opts.scheduler !== false) this.scheduler.start();
+    if (opts.scheduler !== false) {
+      this.scheduler.start();
+      this.maintenance = setInterval(() => this.app.learner.maintenance(new Date()), 60_000);
+    }
+    this.app.bus.on("proposal.created", (e) => void this.notifyProposal(e).catch(() => {}));
     return { host: cfg.host, port };
   }
 
   stop(): Promise<void> {
     return (this.stopping ??= (async () => {
       this.scheduler.stop();
+      clearInterval(this.maintenance);
       for (const [key, p] of this.approvals) {
         clearTimeout(p.timer);
         p.resolve(false);
@@ -113,6 +119,23 @@ export class Gateway {
       fs.rmSync(gatewayInfoFile(this.app.home.data), { force: true });
       this.onStopped();
     })());
+  }
+
+  /** Tell the user in their last chat that something is waiting for approval. */
+  private async notifyProposal(e: { id: string; title: string; agent: string }): Promise<void> {
+    if (!this.app.config.learning.notify) return;
+    const target = this.resolveTarget("last", e.agent);
+    if (!target) return;
+    await target.channel.send(
+      target.peer,
+      `I would like to keep something from our conversation, and it needs your approval:\n\n${e.title}\n\nReply /approve ${e.id} or /reject ${e.id}. The full text is in the Inbox folder of the vault.`,
+    );
+  }
+
+  private inboxText(): string {
+    const pending = this.app.learner.pending();
+    if (!pending.length) return "Nothing is waiting for approval.";
+    return pending.map((i) => `${i.id}  ${i.title}`).join("\n") + "\n\nReply /approve <id> or /reject <id>.";
   }
 
   /** Which agent answers this chat. The first matching binding wins. */
@@ -181,7 +204,20 @@ export class Gateway {
       return channel.send(m.peer, "Started a new conversation.");
     }
     if (command === "/start" || command === "/help") {
-      return channel.send(m.peer, `You are talking to the agent '${agent}'. Send a message to begin. /new starts a fresh conversation.`);
+      return channel.send(
+        m.peer,
+        `You are talking to the agent '${agent}'. Send a message to begin.\n/new starts a fresh conversation.\n/inbox lists what is waiting for your approval.`,
+      );
+    }
+    if (command === "/inbox") return channel.send(m.peer, this.inboxText());
+    const decision = /^\/(approve|reject)\s+(\S+)$/.exec(command);
+    if (decision) {
+      try {
+        const res = await this.app.learner.resolve(decision[2]!, decision[1] === "approve");
+        return channel.send(m.peer, res.message);
+      } catch (err) {
+        return channel.send(m.peer, (err as Error).message);
+      }
     }
 
     this.lastPeer[agent] = chatKey;

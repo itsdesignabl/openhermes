@@ -21,6 +21,10 @@ export interface Backend {
   search(query: string): Promise<SearchHit[]>;
   history(): Promise<{ date: string; message: string }[]>;
   policies(): Promise<Record<string, string>>;
+  inbox(): Promise<{ id: string; title: string }[]>;
+  resolve(ref: string, approve: boolean): Promise<string>;
+  curate(): Promise<string[]>;
+  reflect(file: string): Promise<{ applied: string[]; pending: string[]; skipped: string[] }>;
   /** Messages that arrive outside a turn, such as "settings reloaded". */
   onNotice(fn: (level: string, message: string) => void): void;
   close(): Promise<void>;
@@ -33,11 +37,12 @@ class LocalBackend implements Backend {
 
   async send(text: string, onEvent: (e: UiEvent) => void, ask: Ask, signal?: AbortSignal): Promise<string> {
     const bus = this.app.bus;
+    const mine = (e: { sessionId: string }) => e.sessionId === this.app.session.id;
     const offs = [
-      bus.on("assistant.delta", (e) => onEvent({ type: "delta", text: e.text })),
-      bus.on("assistant.message", (e) => onEvent({ type: "message", text: e.text })),
-      bus.on("tool.requested", (e) => onEvent({ type: "tool_requested", name: e.name, args: e.args })),
-      bus.on("tool.finished", (e) => onEvent({ type: "tool_finished", name: e.name, ok: e.ok, summary: e.summary })),
+      bus.on("assistant.delta", (e) => { if (mine(e)) onEvent({ type: "delta", text: e.text }); }),
+      bus.on("assistant.message", (e) => { if (mine(e)) onEvent({ type: "message", text: e.text }); }),
+      bus.on("tool.requested", (e) => { if (mine(e)) onEvent({ type: "tool_requested", name: e.name, args: e.args }); }),
+      bus.on("tool.finished", (e) => { if (mine(e)) onEvent({ type: "tool_finished", name: e.name, ok: e.ok, summary: e.summary }); }),
     ];
     try {
       return (await this.app.send(text, { signal, approver: ask })).text;
@@ -49,7 +54,12 @@ class LocalBackend implements Backend {
   async search(query: string) { return this.app.memory.search(query, 8); }
   async history() { return (await this.app.history.log(8)).map((e) => ({ date: e.date.toISOString(), message: e.message })); }
   async policies() { return { ...this.app.policies.policies }; }
+  async inbox() { return this.app.learner.pending().map((i) => ({ id: i.id, title: i.title })); }
+  async resolve(ref: string, approve: boolean) { return (await this.app.learner.resolve(ref, approve)).message; }
+  async curate() { return (await this.app.learner.curate()).actions; }
+  reflect(file: string) { return this.app.learner.reflectNote(file); }
   onNotice(fn: (level: string, message: string) => void) {
+    this.app.bus.on("proposal.created", (e) => fn("info", `Waiting for your approval: ${e.title}  (/approve ${e.id} or /reject ${e.id})`));
     this.app.bus.on("log", (e) => fn(e.level, e.message));
     this.app.bus.on("config.reloaded", (e) =>
       e.ok ? fn("info", "Settings reloaded.") : fn("error", `Settings not applied, keeping the previous ones: ${e.error}`),
@@ -80,6 +90,10 @@ class RemoteBackend implements Backend {
   async search(query: string) { return (await this.client.get(`/v1/search?q=${encodeURIComponent(query)}`)).hits; }
   async history() { return (await this.client.get("/v1/history")).entries; }
   async policies() { return (await this.client.get("/v1/policies")).policies; }
+  async inbox() { return (await this.client.get("/v1/inbox")).items; }
+  async resolve(ref: string, approve: boolean) { return (await this.client.post("/v1/inbox/resolve", { ref, approve })).message; }
+  async curate() { return (await this.client.post("/v1/curate", {}, 600_000)).actions; }
+  reflect(file: string) { return this.client.post("/v1/reflect", { file }, 600_000); }
   onNotice() {}
   async close() {}
 }

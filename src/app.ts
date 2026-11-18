@@ -20,6 +20,7 @@ import type { Backend } from "./backend/types.js";
 import { formatNote, parseNote } from "./vault/frontmatter.js";
 import fs from "node:fs";
 import { DiscordChannel } from "./channels/discord.js";
+import { SlackChannel } from "./channels/slack.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import { builtinTools } from "./tools/builtin.js";
 import type { ToolContext } from "./tools/types.js";
@@ -71,6 +72,7 @@ const channelsPlugin: Plugin = {
   setup(api) {
     api.registerChannel("telegram", (ctx) => new TelegramChannel(ctx));
     api.registerChannel("discord", (ctx) => new DiscordChannel(ctx));
+    api.registerChannel("slack", (ctx) => new SlackChannel(ctx));
   },
 };
 
@@ -105,7 +107,7 @@ export class App {
     if (!home.exists()) throw new Error(`No OpenHermes home at ${home.root}. Run: openhermes init`);
     const app = new App(home, opts);
     const stopCollecting = app.bus.on("log", (e) => void app.startupLogs.push(e));
-    app.registry = await loadPlugins(home, app.bus, () => app.config, [corePlugin, backendsPlugin, channelsPlugin]);
+    app.registry = await loadPlugins(home, app.bus, () => app.config, [corePlugin, backendsPlugin, channelsPlugin], (name) => readSecret(home, name));
     app.memory = new MemoryIndex(path.join(home.data, "index.db"), home.vault);
     app.memory.sync();
     app.history = new VaultHistory(home.vault);
@@ -203,20 +205,21 @@ export class App {
     return (this.activeBackend = factory());
   }
 
-  /** The user answered "always" to a command: add it to the allowlist in System/policies.md. */
-  private allowAlways(command: string): void {
+  /** The user answered "always": add the command or tool to its allowlist in System/policies.md. */
+  private allowAlways(action: string, key: string): void {
+    const field = action === "mcp.call" ? "mcp_allowlist" : "command_allowlist";
     try {
       const file = policiesPath(this.home);
       const note = parseNote<Record<string, any>>(fs.readFileSync(file, "utf8"));
-      const list: string[] = Array.isArray(note.data.command_allowlist) ? note.data.command_allowlist.map(String) : [];
-      if (list.includes(command)) return;
-      note.data.command_allowlist = [...list, command];
+      const list: string[] = Array.isArray(note.data[field]) ? note.data[field].map(String) : [];
+      if (list.includes(key)) return;
+      note.data[field] = [...list, key];
       fs.writeFileSync(file, formatNote(note.data, note.body));
       this.recordWrite(file);
       this.reloadConfig();
-      void this.bus.emit("log", { level: "info", message: `Added to the command allowlist: ${command}` });
+      void this.bus.emit("log", { level: "info", message: `Added to the ${action === "mcp.call" ? "tool" : "command"} allowlist: ${key}` });
     } catch (err) {
-      void this.bus.emit("log", { level: "error", message: `Could not add the command to the allowlist: ${(err as Error).message}` });
+      void this.bus.emit("log", { level: "error", message: `Could not add to the allowlist: ${(err as Error).message}` });
     }
   }
 
@@ -269,7 +272,7 @@ export class App {
         await this.bus.emit("approval.resolved", { sessionId, action, approved: !!approved });
         return approved;
       },
-      (command) => this.allowAlways(command),
+      (action, key) => this.allowAlways(action, key),
     );
     const skillPath = /^Skills\/([^/]+)\/SKILL\.md$/i;
     return {
@@ -350,6 +353,7 @@ export class App {
     await this.queue;
     await this.activeBackend?.stop().catch(() => {});
     await Promise.all(this.registry.externals.map((p) => p.stop().catch(() => {})));
+    await Promise.all(this.registry.mcp.map((c) => c.stop().catch(() => {})));
     this.localModel.stop();
     this.memory.close();
   }

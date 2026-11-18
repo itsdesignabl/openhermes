@@ -62,7 +62,16 @@ export class GatewayHttp {
       case "GET /v1/policies":
         return json(res, 200, { policies: app.policies.policies });
       case "GET /v1/inbox":
-        return json(res, 200, { items: app.learner.pending().map((i) => ({ id: i.id, title: i.title, created: i.created })) });
+        return json(res, 200, { items: app.learner.pending().map((i) => ({ id: i.id, title: i.title, created: i.created, file: app.home.display(i.file).replace(/^vault\//, "") })) });
+      case "GET /v1/conversation": {
+        const key = url.searchParams.get("key") ?? `${app.defaultAgent}:local`;
+        const messages = app
+          .conversation(key, undefined, true)
+          .history.filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim())
+          .slice(-40)
+          .map((m) => ({ role: m.role, text: m.content }));
+        return json(res, 200, { messages });
+      }
       case "POST /v1/inbox/resolve": {
         const body = await readBody(req);
         try {
@@ -113,7 +122,7 @@ export class GatewayHttp {
     const app = this.gateway.app;
     const agent = typeof body.agent === "string" ? body.agent : app.defaultAgent;
     const conversation = typeof body.conversation === "string" ? body.conversation : `${agent}:local`;
-    const session = app.conversation(conversation, agent);
+    const session = app.conversation(conversation, agent, body.persist === true);
 
     res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
     const write = (event: Record<string, unknown>) => void res.write(JSON.stringify(event) + "\n");
@@ -136,6 +145,7 @@ export class GatewayHttp {
       const result = await app.send(body.text, {
         conversation,
         agent,
+        persist: body.persist === true,
         signal: abort.signal,
         approver: (action, detail) =>
           new Promise<boolean | "always">((resolve) => {

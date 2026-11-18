@@ -311,6 +311,7 @@ export class Gateway {
       uptime_s: Math.round((Date.now() - this.startedAt) / 1000),
       home: this.app.home.root,
       model: this.app.modelLabel(),
+      default_agent: this.app.defaultAgent,
       channels: [...this.channels.values()].map((c) => ({ name: c.name, state: c.state })),
       jobs: this.scheduler.describe(),
     };

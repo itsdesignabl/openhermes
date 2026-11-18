@@ -129,6 +129,21 @@ export const ConfigSchema = z.object({
   external_plugins: z
     .array(z.object({ name: z.string(), command: z.array(z.string()).min(1), timeout_s: z.number().default(60) }))
     .default([]),
+  /** Tool servers that speak the Model Context Protocol. */
+  mcp_servers: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[A-Za-z0-9_-]{1,24}$/, "use letters, digits, - and _ (at most 24)"),
+        command: z.array(z.string()).optional(),
+        env: z.record(z.string(), z.string()).default({}),
+        url: z.string().optional(),
+        /** Name of the entry in secrets/keys.json sent as a bearer token to a `url` server. */
+        token_secret: z.string().default(""),
+        tools: z.array(z.string()).optional(),
+        timeout_s: z.number().default(120),
+      }),
+    )
+    .default([]),
   learning: z
     .object({
       enabled: z.boolean().default(true),
@@ -163,6 +178,11 @@ export const ConfigSchema = z.object({
         api_base: z.string().default("https://discord.com/api/v10"),
         gateway_url: z.string().default("wss://gateway.discord.gg/?v=10&encoding=json"),
       }).prefault({}),
+      slack: ChannelSchema.extend({
+        api_base: z.string().default("https://slack.com/api"),
+        /** Name of the entry in secrets/keys.json that holds the app-level token (xapp-…). */
+        app_token_secret: z.string().default(""),
+      }).prefault({}),
     })
     .prefault({}),
   routing: z
@@ -190,12 +210,16 @@ export const PoliciesSchema = z.object({
       "command.other": PolicyValue.default("ask"),
       /** A command that is not on the allowlist, when commands run in the Docker sandbox. */
       "command.sandboxed": PolicyValue.default("ask"),
+      /** Use a tool from a tool server (mcp_servers) that is not on mcp_allowlist. */
+      "mcp.call": PolicyValue.default("ask"),
       "import.user": PolicyValue.default("auto"),
       "import.agent": PolicyValue.default("ask"),
     })
     .prefault({}),
   /** A command is allowlisted when it equals an entry or starts with an entry followed by a space. */
   command_allowlist: z.array(z.string()).default([]),
+  /** Tool-server tools that may be used without asking, by their name in the agent (server__tool). */
+  mcp_allowlist: z.array(z.string()).default([]),
 });
 export type Policies = z.infer<typeof PoliciesSchema>;
 export type PolicyAction = keyof Policies["policies"];

@@ -16,8 +16,8 @@ export class PolicyEngine {
   constructor(
     private getPolicies: () => Policies,
     private approver: Approver,
-    /** Called when the user answers "always" to a command. */
-    private onAlways: (command: string) => void = () => {},
+    /** Called when the user answers "always": the action and what to remember for it (a command, or a tool name). */
+    private onAlways: (action: PolicyAction, key: string) => void = () => {},
   ) {}
 
   valueOf(action: PolicyAction): PolicyValue {
@@ -34,13 +34,19 @@ export class PolicyEngine {
     });
   }
 
-  /** `command` is given for command actions, so "always" knows what to add to the allowlist. */
-  async check(action: PolicyAction, detail: string, command?: string): Promise<void> {
+  mcpAllowed(tool: string): boolean {
+    return this.getPolicies().mcp_allowlist.includes(tool);
+  }
+
+  /** `alwaysKey` is what an "always" answer adds to the allowlist: the command, or the tool name. */
+  async check(action: PolicyAction, detail: string, alwaysKey?: string): Promise<void> {
     const value = this.valueOf(action);
     if (value === "auto") return;
     if (value === "deny") throw new PolicyDenied(action, "policy is set to deny");
     const answer = await this.approver(action, detail);
     if (!answer) throw new PolicyDenied(action, "the user declined");
-    if (answer === "always" && command && !/[;&|<>`\n]|\$\(/.test(command)) this.onAlways(command.trim());
+    if (answer !== "always" || !alwaysKey) return;
+    if (action === "mcp.call") this.onAlways(action, alwaysKey);
+    else if (!/[;&|<>`\n]|\$\(/.test(alwaysKey)) this.onAlways(action, alwaysKey.trim());
   }
 }

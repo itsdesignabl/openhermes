@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { App } from "./app.js";
 import { loadConfig, loadPolicies } from "./kernel/config.js";
@@ -28,6 +29,11 @@ const HELP = `openhermes <command> [options]
   pair approve <code>      Approve a pairing code someone received from the bot
   pair revoke <channel:id> Remove someone's access
   secret set <name>        Store a bot token or API key (also: list, remove <name>)
+  import openclaw|hermes   Bring in personality, memory and skills from another agent
+        --source <folder>    where it is installed (default: found in your user folder)
+        --dry-run            show what would happen without writing anything
+  import vault <folder>    Copy an existing notes folder into the vault
+  obsidian install         Put the chat pane plugin into this vault for Obsidian
   inbox                    What the agent wants to keep and is waiting for you to approve
   inbox approve <id>       Approve it (also: inbox reject <id>, inbox show <id>)
   reflect [session note]   Review a conversation now for things worth keeping (default: the latest)
@@ -56,6 +62,9 @@ export async function main(argv: string[]): Promise<number> {
       url: { type: "string" },
       only: { type: "string" },
       force: { type: "boolean" },
+      source: { type: "string" },
+      "dry-run": { type: "boolean" },
+      agent: { type: "string" },
     },
   });
   const [command, ...rest] = positionals;
@@ -189,6 +198,64 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       throw new Error("Use: openhermes gateway run | start | stop | status");
+    }
+
+    case "obsidian": {
+      if (rest[0] !== "install") throw new Error("Use: openhermes obsidian install");
+      const built = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "obsidian");
+      if (!fs.existsSync(path.join(built, "main.js"))) throw new Error("The plugin has not been built. Run `npm run build` in the runtime folder first.");
+      const config = path.join(home.vault, ".obsidian");
+      const dest = path.join(config, "plugins", "openhermes");
+      fs.mkdirSync(dest, { recursive: true });
+      for (const f of ["main.js", "manifest.json", "styles.css"]) fs.copyFileSync(path.join(built, f), path.join(dest, f));
+      // switch the plugin on, keeping whatever else is enabled
+      const listFile = path.join(config, "community-plugins.json");
+      let enabled: string[] = [];
+      try {
+        enabled = JSON.parse(fs.readFileSync(listFile, "utf8"));
+      } catch {}
+      if (!enabled.includes("openhermes")) fs.writeFileSync(listFile, JSON.stringify([...enabled, "openhermes"], null, 2));
+      console.log(`Installed the OpenHermes plugin into ${home.display(dest)}.`);
+      console.log("In Obsidian: open this vault, go to Settings → Community plugins, and choose \"Turn on community plugins\".");
+      console.log("Then click the speech-bubble icon in the left ribbon, or run the command \"OpenHermes: Open chat\".");
+      return 0;
+    }
+
+    case "import": {
+      const [what, positional] = rest;
+      const dryRun = !!values["dry-run"];
+      const { importAgent, importVault, defaultSource } = await import("./import/importer.js");
+      const commit = async (message: string) => {
+        const { default: git } = await import("isomorphic-git");
+        const history = new VaultHistory(home.vault);
+        await history.init();
+        for (const [file, head, workdir] of await git.statusMatrix({ fs, dir: home.vault })) {
+          if (head === 1 && workdir === 0) await git.remove({ fs, dir: home.vault, filepath: file });
+          else if (workdir !== 1) await git.add({ fs, dir: home.vault, filepath: file });
+        }
+        await git.commit({ fs, dir: home.vault, message, author: { name: "OpenHermes user", email: "user@openhermes.local" } });
+      };
+      if (what === "vault") {
+        const src = positional ?? values.source;
+        if (!src) throw new Error("Give the folder to copy: openhermes import vault <folder>");
+        const r = importVault(home, src);
+        await commit(`Import notes from ${src}`);
+        console.log(`Copied ${r.files} files to ${home.display(r.dest)}. The original was not changed.`);
+        return 0;
+      }
+      if (what === "openclaw" || what === "hermes") {
+        const src = values.source ?? positional ?? defaultSource(what);
+        if (!src) throw new Error(`No ${what === "openclaw" ? "OpenClaw" : "Hermes Agent"} folder was found in your user folder. Give its location with --source <folder>.`);
+        const report = importAgent(home, loadConfig(home), what, src, { agent: values.agent, dryRun });
+        console.log(`${dryRun ? "Dry run: nothing was written. This is what would happen" : "Imported"} from ${report.source}\n`);
+        for (const s of report.steps) console.log(`${s.status.padEnd(8)}${s.what}\n        ${s.detail}`);
+        if (!dryRun) {
+          await commit(`Import from ${what}`);
+          console.log(`\nThe originals and this report are in ${home.display(report.archive)}. Undo is possible through the vault history.`);
+        }
+        return 0;
+      }
+      throw new Error("Use: openhermes import openclaw | hermes [--source <folder>] [--dry-run] [--agent <name>]   or   openhermes import vault <folder>");
     }
 
     case "inbox": {

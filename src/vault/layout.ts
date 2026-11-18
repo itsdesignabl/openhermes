@@ -6,7 +6,8 @@ const DIRS = [
   "Agents/main", "Memory/Daily", "Memory/Entities", "Skills", "Jobs", "Inbox", "Imports", "Sessions", "System",
 ];
 
-const FILES: Record<string, string> = {
+/** The notes a new vault starts with. Importers use them to tell an untouched note from one you edited. */
+export const STARTER_NOTES: Record<string, string> = {
   "Agents/main/agent.md": `---
 heartbeat:
   every: 30m          # 0m turns it off
@@ -83,6 +84,7 @@ backend:
     user: ""
 hooks: []                     # for example: - { event: tool.before, match: run_command, command: [python, hooks/audit.py] }
 external_plugins: []          # for example: - { name: weather, command: [python, plugins/weather.py] }
+mcp_servers: []               # for example: - { name: files, command: [npx, -y, "@modelcontextprotocol/server-filesystem", "C:/Some/Folder"] }
 learning:
   enabled: true
   reflect_every_turns: 10     # review a conversation after this many of your messages
@@ -105,6 +107,11 @@ channels:
     allow_from: []
     pairing: true
     require_mention: true
+  slack:
+    enabled: false
+    allow_from: []
+    pairing: true
+    require_mention: true
 routing:
   default_agent: main
   bindings: []          # for example: - { channel: telegram, peer: "12345", agent: work }
@@ -120,9 +127,10 @@ Edit the properties above. Changes are picked up without a restart.
 - \`backend\`: where shell commands run. \`docker\` runs them in a container that sees only the workspace folder and, read-only, the vault. It needs Docker Desktop. \`ssh\` runs them on another machine.
 - \`hooks\`: programs run before or after a turn or tool call. They start in the \`runtime\` folder, receive JSON on standard input, and can refuse or change the action.
 - \`external_plugins\`: plugins written in any language. See \`docs/PLUGINS.md\` in the program folder.
+- \`mcp_servers\`: tool servers that speak the Model Context Protocol. Give each a \`name\` and either a \`command\` (a local program) or a \`url\` (with \`token_secret\` naming a stored key). \`tools: [a, b]\` limits which of its tools are offered. The agent asks before using a tool until you answer "always".
 - \`learning\`: when the agent reviews conversations for things worth keeping. What it may save on its own is in \`policies.md\`.
 - \`gateway\`: where the always-on process listens. It only accepts connections from this computer.
-- \`channels\`: chat services. Store the bot token with \`openhermes secret set telegram_bot_token\` (or \`discord_bot_token\`), set \`enabled: true\`, and restart the gateway.
+- \`channels\`: chat services. Store the bot token with \`openhermes secret set telegram_bot_token\` (or \`discord_bot_token\`; Slack needs both \`slack_bot_token\` and \`slack_app_token\`), set \`enabled: true\`, and restart the gateway.
 - \`routing\`: which agent answers which chat. The first matching binding wins.
 - \`plugins\`: extra plugin modules to load from \`runtime/plugins/\`.
 `,
@@ -151,6 +159,7 @@ policies:
   command.allowlisted: auto
   command.other: ask
   command.sandboxed: ask
+  mcp.call: ask
   import.user: auto
   import.agent: ask
 command_allowlist:
@@ -158,6 +167,7 @@ command_allowlist:
   - git log
   - git diff
   - node --version
+mcp_allowlist: []
 ---
 
 # Policies
@@ -173,12 +183,13 @@ Each action is \`auto\` (do it), \`ask\` (ask me first) or \`deny\` (never).
 | \`command.allowlisted\` | Run a command listed in \`command_allowlist\` |
 | \`command.other\` | Run any other command |
 | \`command.sandboxed\` | Run any other command when \`backend.type\` is \`docker\` (used in place of \`command.other\`) |
+| \`mcp.call\` | Use a tool from a tool server that is not listed in \`mcp_allowlist\` |
 | \`import.user\` | Copy in an outside file that you named in your message |
 | \`import.agent\` | Copy in an outside file the agent chose itself |
 
 The same rules apply when the agent reviews a conversation afterwards. Where a rule says \`ask\`, the suggestion is written to the \`Inbox\` folder and waits there until you set its \`status\` to \`approved\` or \`rejected\`.
 
-When asked about a command you can answer "always": that adds the command to \`command_allowlist\` above.
+When asked about a command or a tool-server tool you can answer "always": that adds it to \`command_allowlist\` or \`mcp_allowlist\` above.
 
 Writing outside the home folder is always refused and cannot be changed here. The agent can also never edit the notes in this \`System\` folder, an agent's \`agent.md\`, or the notes in \`Inbox\`.
 `,
@@ -189,7 +200,7 @@ export function scaffold(home: Home): { created: string[] } {
   home.ensureDirs();
   const created: string[] = [];
   for (const d of DIRS) fs.mkdirSync(path.join(home.vault, d), { recursive: true });
-  for (const [rel, content] of Object.entries(FILES)) {
+  for (const [rel, content] of Object.entries(STARTER_NOTES)) {
     const file = path.join(home.vault, rel);
     if (!fs.existsSync(file)) {
       fs.writeFileSync(file, content);

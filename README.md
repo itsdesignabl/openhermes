@@ -7,7 +7,7 @@ A self-hosted personal AI agent that brings together two open-source approaches:
 
 Everything the agent knows and does lives as Markdown in a local vault you can open in Obsidian, inside one self-contained folder. Delete that folder and the agent and all its data are gone.
 
-**Status:** milestones M0 (kernel and vault), M1 (gateway, Telegram, Discord, heartbeat, jobs) M2 (learning loop) and M3 (sandboxed commands, skill scanner, plugins in any language) are built. Importers for OpenClaw and Hermes come in M4; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
+**Status:** milestones M0 to M4 are built: kernel and vault, gateway and chat channels, learning loop, sandbox and plugins, and now importers, tool servers, Slack and the Obsidian pane. M5 (measuring whether learned skills help) is still open; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
 
 ## What works in M0
 
@@ -49,6 +49,14 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 - **Hooks:** small programs in any language that run before or after a turn or tool call and can refuse or change it
 - **Plugins in any language:** a separate program that adds tools and hooks over a simple JSON protocol. See [docs/PLUGINS.md](docs/PLUGINS.md) and the Python examples in `examples/`
 - **Settings are off limits to the agent:** it can no longer edit anything in `vault\System\` or an agent's `agent.md`
+
+## What M4 adds
+
+- **Import from OpenClaw or Hermes Agent:** personality, memory, daily notes, heartbeat checklist and skills. Nothing in the source is changed, keys and settings are never copied, and imported skills go through the scanner and wait for your approval
+- **Import an existing notes folder** into the vault, so the agent can search it
+- **Tool servers (MCP):** connect any Model Context Protocol server, local or over HTTP. Its tools appear beside the built-in ones, and the agent asks before using one until you answer always
+- **Slack** as a third chat channel
+- **Obsidian pane:** chat with the agent beside your notes, with live tool activity, approval buttons, and the Inbox
 
 ## Install (Windows)
 
@@ -137,6 +145,8 @@ openhermes ask "what do you remember about my projects?"
 
 | `gateway start`, `stop`, `status` | Run the always-on gateway in the background |
 | `gateway run` | Run it in the current window, with its log on screen |
+| `import openclaw`, `import hermes`, `import vault <folder>` | Bring in another agent's setup, or a folder of notes |
+| `obsidian install` | Put the chat pane plugin into the vault |
 | `inbox`, `inbox approve <id>`, `inbox reject <id>` | See and decide what the agent wants to keep |
 | `skills` | List skills with their origin, trust level and use count |
 | `skills import <folder>`, `skills trust <name>`, `skills scan <name>`, `skills block <name>` | Bring in a skill from elsewhere and decide whether to trust it |
@@ -147,7 +157,57 @@ openhermes ask "what do you remember about my projects?"
 
 Open `C:\Openhermes Programming Files\vault` as a vault in Obsidian to read and edit everything.
 
-## Chat from Telegram or Discord
+## Chat inside Obsidian
+
+```bash
+openhermes obsidian install
+```
+
+Then open `C:\Openhermes Programming Files\vault` in Obsidian, go to Settings → Community plugins, and turn on community plugins. Click the speech-bubble icon in the left ribbon.
+
+The pane talks to the gateway. If the gateway is not running, the pane shows a button that starts it. Waiting Inbox items appear at the top with Approve and Reject buttons, and a request to run a command shows Allow, Always allow and Decline.
+
+## Move over from OpenClaw or Hermes Agent
+
+See what would happen first:
+
+```bash
+openhermes import openclaw --dry-run
+```
+
+Then run it without `--dry-run`. Use `hermes` in place of `openclaw` for Hermes Agent, and `--source <folder>` if it is not in the usual place in your user folder.
+
+| Item | What happens |
+|---|---|
+| `SOUL.md`, `IDENTITY.md` | Become the agent's personality, unless you have already edited yours |
+| `MEMORY.md`, `USER.md` | Split into facts and merged into memory. Repeats are dropped, anything that looks like a password is left out, and what does not fit the size limit goes to a searchable overflow note |
+| Daily notes | Copied to `Memory\Daily` |
+| `HEARTBEAT.md` | Adopted if your checklist is empty |
+| Skills | Scanned and imported for review. Approve each with `openhermes skills trust <name>` |
+| `AGENTS.md`, `TOOLS.md` | Kept for you to merge by hand, because they refer to the other program's tools |
+| Settings, API keys, tokens | Not imported |
+
+The originals and a report are saved in `vault\Imports\openclaw` (or `hermes`). The import is one entry in the vault history.
+
+## Connect tool servers (MCP)
+
+Add servers under `mcp_servers` in `vault\System\config.md`:
+
+```yaml
+mcp_servers:
+  - name: files
+    command: [npx, -y, "@modelcontextprotocol/server-filesystem", "C:/Some/Folder"]
+  - name: kb
+    url: https://example.com/mcp
+    token_secret: kb_token        # stored with: openhermes secret set kb_token
+    tools: [search]               # optional: offer only these
+```
+
+Restart the agent or gateway after changing the list. `openhermes doctor` shows whether each server connected.
+
+A tool server runs outside the home folder and can do whatever it was built to do, so the agent asks before each use (`mcp.call` in `policies.md`). Answer always to stop being asked about that tool.
+
+## Chat from Telegram, Discord or Slack
 
 **Telegram**
 
@@ -178,6 +238,13 @@ openhermes pair approve <code>
 3. Invite the bot to your server with permission to read and send messages.
 4. Store the token with `openhermes secret set discord_bot_token`, set `channels.discord.enabled: true`, and restart the gateway.
 5. Send the bot a direct message and approve the pairing code as above.
+
+**Slack**
+
+1. At api.slack.com create an app and turn on **Socket Mode**. That gives an app-level token starting with `xapp-`.
+2. Under Event Subscriptions subscribe the bot to `message.im` and `message.channels`. Under OAuth add the scopes `chat:write`, `im:history` and `channels:history`, install the app, and copy the bot token starting with `xoxb-`.
+3. Store both with `openhermes secret set slack_app_token` and `openhermes secret set slack_bot_token`, set `channels.slack.enabled: true`, and restart the gateway.
+4. Send the bot a direct message and approve the pairing code.
 
 In group chats and servers the agent answers only when mentioned, and only to people you have approved. `/new` in a chat starts a fresh conversation.
 
@@ -247,13 +314,18 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 
 ## Known gaps
 
-- **Nothing has been run against a real model, real Telegram or real Discord.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
+- **Nothing has been run against a real model, or the real Telegram, Discord or Slack services.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
 - **Commands are not sandboxed by default.** With `backend.type: local`, a shell command can touch any path, including the settings files the agent's file tools are barred from. Commands not on the allowlist ask for approval first. Use the Docker backend to confine them.
 - **The Docker backend was tested on Linux only**, with a real Docker daemon and an Alpine image. It has not been run with Docker Desktop on Windows, and the default image `python:3.12-slim` could not be downloaded in the test environment.
 - **The SSH backend was tested against a stand-in**, not a real remote machine.
 - **The scanner matches known patterns.** It catches the common attack shapes and is not a guarantee. Read an imported skill before trusting it.
 - **Hooks and plugins run on your computer without a sandbox,** with your rights.
+- **The importers were written from descriptions of the OpenClaw and Hermes folder layouts**, not tested against real installations. Run with `--dry-run` first and check the report.
+- **Tool servers were tested against stand-in servers** over both transports, not against a published MCP server.
+- **Slack was tested against a stand-in** for Slack's API.
+- **The Obsidian pane has never been opened in Obsidian.** It type-checks against Obsidian's API and its gateway client is tested, but the interface itself is unverified.
+- **WhatsApp and Signal are not built.** Both need a separate bridge program.
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
 - **One turn at a time.** Messages from different chats queue behind each other, and a turn waiting for an approval holds the queue until you answer or the time limit (5 minutes by default) passes.

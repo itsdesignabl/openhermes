@@ -10,6 +10,8 @@ There are three ways to extend the agent with code. All of them live in the `run
 
 Code you add here runs on your computer with your rights, outside any sandbox. Only install what you have read.
 
+If the tool you want already exists as a Model Context Protocol server, you do not need a plugin: list it under `mcp_servers` in the settings (see the README).
+
 ## Hooks
 
 A hook is a program that receives one JSON object on standard input and may print one JSON object.

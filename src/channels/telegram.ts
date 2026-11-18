@@ -92,7 +92,7 @@ export class TelegramChannel implements Channel {
         await this.api("sendMessage", { chat_id: peer, text: part });
       } catch (err) {
         const wait = (err as { retryAfter?: number }).retryAfter;
-        if (!wait || wait > 60) throw err;
+        if (wait === undefined || wait > 60) throw err;
         await sleep(wait * 1000, this.abort.signal);
         await this.api("sendMessage", { chat_id: peer, text: part });
       }

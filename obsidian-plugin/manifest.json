@@ -1,0 +1,9 @@
+{
+  "id": "openhermes",
+  "name": "OpenHermes",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Chat with your OpenHermes agent beside your notes, and approve what it wants to keep.",
+  "author": "OpenHermes contributors",
+  "isDesktopOnly": true
+}

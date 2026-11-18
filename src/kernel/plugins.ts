@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { Backend } from "../backend/types.js";
 import { HookRunner, type HookEvent, type HookFn } from "../hooks/runner.js";
+import { McpClient, mcpToolName } from "../mcp/client.js";
 import { ExternalPlugin } from "./external.js";
 import type { ChannelFactory } from "../channels/types.js";
 import type { Provider } from "../provider/openai.js";
@@ -38,6 +39,7 @@ export class Registry {
   readonly channels = new Map<string, ChannelFactory>();
   readonly backends = new Map<string, () => Backend>();
   readonly externals: ExternalPlugin[] = [];
+  readonly mcp: McpClient[] = [];
   hooks!: HookRunner;
   providerFactory?: () => Provider;
   readonly loaded: string[] = [];
@@ -47,7 +49,13 @@ export class Registry {
  * Built-in features are registered through the same interface as user plugins.
  * User plugins are ES modules in runtime/plugins/, named in System/config.md.
  */
-export async function loadPlugins(home: Home, bus: Bus, config: () => Config, builtins: Plugin[]): Promise<Registry> {
+export async function loadPlugins(
+  home: Home,
+  bus: Bus,
+  config: () => Config,
+  builtins: Plugin[],
+  secret: (name: string) => string | undefined = () => undefined,
+): Promise<Registry> {
   const registry = new Registry();
   const log = (level: "info" | "warn" | "error", message: string) => void bus.emit("log", { level, message });
   registry.hooks = new HookRunner(home, config, log);
@@ -113,5 +121,40 @@ export async function loadPlugins(home: Home, bus: Bus, config: () => Config, bu
       await bus.emit("log", { level: "error", message: `plugin '${spec.name}' failed to load: ${(err as Error).message}` });
     }
   }
+  // Tool servers are connected in parallel: one slow or broken server does not hold up the others.
+  await Promise.all(
+    config().mcp_servers.map(async (spec) => {
+      let client: McpClient | undefined;
+      try {
+        client = new McpClient(home, spec, secret(spec.token_secret), log);
+        const tools = (await client.listTools()).filter((t) => !spec.tools || spec.tools.includes(t.name));
+        for (const t of tools) {
+          const name = mcpToolName(spec.name, t.name);
+          if (registry.tools.has(name)) {
+            log("warn", `tool server '${spec.name}': the tool '${t.name}' is skipped because the name ${name} is taken`);
+            continue;
+          }
+          const c = client;
+          registry.tools.set(name, {
+            name,
+            // descriptions come from the server and are shown to the model: keep them short and labelled
+            description: `[tool server ${spec.name}] ${t.description.replace(/\s+/g, " ").slice(0, 800)}`,
+            schema: z.record(z.string(), z.unknown()),
+            jsonSchema: t.inputSchema,
+            run: async (args, ctx) => {
+              if (!ctx.policy.mcpAllowed(name)) await ctx.policy.check("mcp.call", `use ${t.name} from the tool server '${spec.name}': ${JSON.stringify(args).slice(0, 300)}`, name);
+              return c.callTool(t.name, args);
+            },
+          });
+        }
+        registry.mcp.push(client);
+        registry.loaded.push(`mcp:${spec.name}`);
+        log("info", `tool server '${spec.name}' connected with ${tools.length} tool${tools.length === 1 ? "" : "s"}`);
+      } catch (err) {
+        await client?.stop().catch(() => {});
+        log("error", `tool server '${spec.name}' failed to connect: ${(err as Error).message}`);
+      }
+    }),
+  );
   return registry;
 }

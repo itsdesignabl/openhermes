@@ -15,9 +15,16 @@ export interface ToolSpec {
   parameters: Record<string, unknown>;
 }
 
+export interface Usage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
 export interface ChatResult {
   content: string;
   toolCalls: ToolCall[];
+  /** Token counts as reported by the endpoint. Missing when it does not report them. */
+  usage?: Usage;
 }
 
 export interface Provider {
@@ -34,6 +41,7 @@ export interface OpenAIProviderOptions {
 
 /** Client for any OpenAI-compatible chat endpoint: llama.cpp, Ollama, LM Studio, or a cloud provider. */
 export class OpenAIProvider implements Provider {
+  private usageOption = true;
   constructor(private opts: OpenAIProviderOptions) {}
 
   async chat(messages: ChatMessage[], tools: ToolSpec[], onDelta?: (text: string) => void, signal?: AbortSignal): Promise<ChatResult> {
@@ -41,21 +49,33 @@ export class OpenAIProvider implements Provider {
       model: this.opts.model,
       temperature: this.opts.temperature ?? 0.2,
       stream: true,
+      // ask for token counts at the end of the stream; dropped if the endpoint does not know the option
+      ...(this.usageOption ? { stream_options: { include_usage: true } } : {}),
       messages: messages.map(toWire),
       ...(tools.length
         ? { tools: tools.map((t) => ({ type: "function", function: t })), tool_choice: "auto" }
         : {}),
     };
     const timeout = AbortSignal.timeout(this.opts.timeoutMs ?? 600_000);
-    const res = await fetch(this.opts.baseUrl.replace(/\/+$/, "") + "/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
+    const post = (payload: object) =>
+      fetch(this.opts.baseUrl.replace(/\/+$/, "") + "/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+    let res = await post(body);
+    if ((res.status === 400 || res.status === 422) && this.usageOption) {
+      // an endpoint that rejects the usage option: stop sending it and try once more
+      const text = await res.text().catch(() => "");
+      this.usageOption = false;
+      const { stream_options, ...plain } = body as Record<string, unknown>;
+      res = await post(plain);
+      if (!res.ok) throw new Error(`Model endpoint returned ${res.status}: ${(await res.text().catch(() => text)).slice(0, 500)}`);
+    }
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => "");
       throw new Error(`Model endpoint returned ${res.status}: ${text.slice(0, 500)}`);
@@ -63,7 +83,11 @@ export class OpenAIProvider implements Provider {
 
     let content = "";
     const calls = new Map<number, ToolCall>();
+    let usage: Usage | undefined;
     const handle = (chunk: any) => {
+      if (chunk?.usage && typeof chunk.usage.prompt_tokens === "number") {
+        usage = { promptTokens: chunk.usage.prompt_tokens, completionTokens: chunk.usage.completion_tokens ?? 0 };
+      }
       const delta = chunk?.choices?.[0]?.delta ?? chunk?.choices?.[0]?.message;
       if (!delta) return;
       if (typeof delta.content === "string" && delta.content) {
@@ -108,7 +132,7 @@ export class OpenAIProvider implements Provider {
       .sort((a, b) => a[0] - b[0])
       .map(([i, c]) => ({ ...c, id: c.id || `call_${i}_${Date.now().toString(36)}` }))
       .filter((c) => c.name);
-    return { content, toolCalls };
+    return { content, toolCalls, usage };
   }
 }
 

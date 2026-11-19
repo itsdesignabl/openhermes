@@ -27,6 +27,7 @@ import type { ToolContext } from "./tools/types.js";
 import { Learner } from "./learning/learner.js";
 import { recordSkillUse } from "./learning/curator.js";
 import { stampSkill } from "./learning/proposals.js";
+import { recordTurn } from "./eval/metrics.js";
 import { VaultHistory } from "./vault/git.js";
 import { VaultWatcher } from "./vault/watcher.js";
 
@@ -92,6 +93,8 @@ export class App {
   private localModel: LocalModel;
   private providers = new Map<string, Provider>();
   private activeBackend?: Backend;
+  /** Skills read during the turn that is running, for the metrics log. */
+  private turnSkills = new Set<string>();
   /** Messages logged while starting (for example a plugin that failed to load), for interfaces that attach afterwards. */
   readonly startupLogs: { level: "info" | "warn" | "error"; message: string }[] = [];
   /** Turns run one at a time: one local model, one vault history. */
@@ -296,7 +299,10 @@ export class App {
       },
       read: (abs) => {
         const m = skillPath.exec(path.relative(this.home.vault, abs).split(path.sep).join("/"));
-        if (m) recordSkillUse(this.home, m[1]!);
+        if (m) {
+          recordSkillUse(this.home, m[1]!);
+          this.turnSkills.add(m[1]!);
+        }
       },
     };
   }
@@ -316,6 +322,7 @@ export class App {
     let tools = [...this.registry.tools.values()];
     if (settings.tools) tools = tools.filter((t) => settings.tools!.includes(t.name));
     const system = buildSystemPrompt(this.home, agent, this.backend.describe()) + (o.systemNote ? `\n\n${o.systemNote}` : "");
+    this.turnSkills = new Set();
     const hooks = this.registry.hooks;
     const hookInfo = { agent, conversation: session.key };
     try {
@@ -339,6 +346,19 @@ export class App {
       });
       session.append(result.messages, o.persist ?? false);
       this.recordWrite(session.file);
+      recordTurn(this.home, {
+        at: new Date().toISOString(),
+        agent,
+        kind: /:(heartbeat|job):/.exec(session.key)?.[1] ?? (session.key.endsWith(LOCAL_SUFFIX) || session.key.endsWith(":obsidian") ? "local" : "chat"),
+        ok: true,
+        model_calls: result.usage.modelCalls,
+        tool_calls: result.toolsUsed.length,
+        prompt_tokens: result.usage.promptTokens,
+        completion_tokens: result.usage.completionTokens,
+        estimated: result.usage.estimated,
+        ms: result.usage.ms,
+        skills: [...this.turnSkills],
+      });
       this.learner.afterTurn(session);
       await hooks.run("turn.after", { ...hookInfo, text: result.text, tools_used: result.toolsUsed });
       return result;

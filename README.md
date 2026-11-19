@@ -7,7 +7,7 @@ A self-hosted personal AI agent that brings together two open-source approaches:
 
 Everything the agent knows and does lives as Markdown in a local vault you can open in Obsidian, inside one self-contained folder. Delete that folder and the agent and all its data are gone.
 
-**Status:** milestones M0 to M4 are built: kernel and vault, gateway and chat channels, learning loop, sandbox and plugins, and now importers, tool servers, Slack and the Obsidian pane. M5 (measuring whether learned skills help) is still open; see [docs/PROPOSAL.md](docs/PROPOSAL.md).
+**Status:** all planned milestones, M0 to M5, are built. Nothing has yet been run with a real model or on Windows; see [Known gaps](#known-gaps).
 
 ## What works in M0
 
@@ -57,6 +57,12 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 - **Tool servers (MCP):** connect any Model Context Protocol server, local or over HTTP. Its tools appear beside the built-in ones, and the agent asks before using one until you answer always
 - **Slack** as a third chat channel
 - **Obsidian pane:** chat with the agent beside your notes, with live tool activity, approval buttons, and the Inbox
+
+## What M5 adds
+
+- **Cost of every turn:** model calls, tokens and time are counted for each turn and logged as numbers only, never text
+- **`openhermes stats`:** what your recent turns cost, by week and by skill
+- **`openhermes bench`:** a controlled test of whether learned skills make repeated tasks cheaper, with your own model
 
 ## Install (Windows)
 
@@ -141,6 +147,8 @@ openhermes ask "what do you remember about my projects?"
 | `history` | The agent's recent changes to the vault |
 | `model install`, `model status` | Manage the local model |
 | `eval` | Run the tool-calling test |
+| `bench` | Measure whether learned skills make repeated tasks cheaper |
+| `stats` | What your recent turns cost, by week and by skill |
 | `doctor` | Check the installation |
 
 | `gateway start`, `stop`, `status` | Run the always-on gateway in the background |
@@ -296,6 +304,34 @@ Decided items move to `vault\Inbox\Done\`. Everything the review saves is one co
 
 Single `openhermes ask` commands without a running gateway are separate one-message conversations and are not reviewed automatically. Use `openhermes reflect` for those.
 
+## Measure whether learning helps
+
+```bash
+openhermes bench
+```
+
+The benchmark uses four kinds of task whose correct handling depends on conventions written down somewhere in a vault (a weekly report format, a release process, a people-note template, an order lookup). Each is run three ways, in throwaway homes under `data\bench` so your own vault is not touched:
+
+| Arm | Setup |
+|---|---|
+| `baseline` | No skill. The agent has to find the convention |
+| `learned` | The agent first does one practice task of the same kind and reviews it, as it would in normal use. Then it gets a second, different task |
+| `reference` | A correct hand-written skill is installed |
+
+For each arm it reports how often the task was done correctly, and the model calls, tokens and time it took. It then compares the arms over matched runs and says "lower" or "higher" only when there are at least six matched correct runs, the gap is beyond the run-to-run noise, and it is at least 5%. It also reports how often the review wrote a skill, what the review cost, and after how many repeats that cost is paid back.
+
+The two skill arms separate two questions. If `reference` helps and `learned` does not, the model follows skills but its reviews write poor ones. If neither helps, or the skill is rarely opened, the model is not using skills.
+
+By default this is 36 measured runs plus 12 practice runs and reviews. With a small local model that can take an hour or more. To shorten it:
+
+```bash
+openhermes bench --only weekly,release --trials 2
+```
+
+With fewer than six matched runs the report says there are too few to judge cost.
+
+`openhermes stats` shows the same measures for your real conversations. Those are different tasks each time, so it describes your usage and is not a comparison.
+
 ## Customize
 
 | To change | Edit |
@@ -326,6 +362,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **Slack was tested against a stand-in** for Slack's API.
 - **The Obsidian pane has never been opened in Obsidian.** It type-checks against Obsidian's API and its gateway client is tested, but the interface itself is unverified.
 - **WhatsApp and Signal are not built.** Both need a separate bridge program.
+- **Whether learned skills help is unmeasured.** `bench` is the instrument for it and has only been run with a simulated model. Its four task types are small and synthetic, so a result there is an indication, not proof for your own work.
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
 - **One turn at a time.** Messages from different chats queue behind each other, and a turn waiting for an approval holds the queue until you answer or the time limit (5 minutes by default) passes.

@@ -27,6 +27,23 @@ export interface TurnResult {
   /** Messages produced this turn (user, assistant, tool), to append to the history. */
   messages: ChatMessage[];
   toolsUsed: string[];
+  /** What the turn cost. Token counts are the endpoint's own when it reports them, otherwise an estimate from text length. */
+  usage: TurnUsage;
+}
+
+export interface TurnUsage {
+  modelCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  estimated: boolean;
+  ms: number;
+}
+
+/** Rough token count for endpoints that do not report one: about four characters per token. */
+export function estimateTokens(messages: ChatMessage[], specs: ToolSpec[]): number {
+  let chars = JSON.stringify(specs).length;
+  for (const m of messages) chars += m.content.length + (m.role === "assistant" ? JSON.stringify(m.tool_calls ?? []).length : 0) + 8;
+  return Math.ceil(chars / 4);
 }
 
 export function toolSpecs(tools: Tool<any>[]): ToolSpec[] {
@@ -47,6 +64,8 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
 
   let steps = 0;
   let finalText = "";
+  const started = Date.now();
+  const usage: TurnUsage = { modelCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false, ms: 0 };
   for (;;) {
     steps++;
     const lastStep = steps > o.maxSteps;
@@ -60,6 +79,15 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       (text) => void o.bus.emit("assistant.delta", { sessionId: o.sessionId, text }),
       o.signal,
     );
+    usage.modelCalls++;
+    if (result.usage) {
+      usage.promptTokens += result.usage.promptTokens;
+      usage.completionTokens += result.usage.completionTokens;
+    } else {
+      usage.estimated = true;
+      usage.promptTokens += estimateTokens(messages, lastStep ? [] : specs);
+      usage.completionTokens += Math.ceil((result.content.length + JSON.stringify(result.toolCalls).length) / 4);
+    }
     produced.push({ role: "assistant", content: result.content, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
     if (result.content) await o.bus.emit("assistant.message", { sessionId: o.sessionId, text: result.content });
 
@@ -116,5 +144,6 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   }
 
   await o.bus.emit("turn.finished", { sessionId: o.sessionId, text: finalText, steps });
-  return { text: finalText, steps, messages: produced, toolsUsed };
+  usage.ms = Date.now() - started;
+  return { text: finalText, steps, messages: produced, toolsUsed, usage };
 }

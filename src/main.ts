@@ -42,6 +42,11 @@ const HELP = `openhermes <command> [options]
   skills import <folder>   Copy in a skill from elsewhere; it is scanned and waits for your approval
   skills trust <name>      Approve an imported skill (also: skills scan <name>, skills block <name>)
   eval [--only <text>]     Run the tool-calling test against the configured model
+  bench                    Measure whether learned skills make repeated tasks cheaper
+        --trials <n>         runs per task type and arm (default 3)
+        --only <a,b>         only task types whose name contains one of these
+        --arms <a,b>         any of baseline, learned, reference
+  stats [--days <n>]       What your recent turns cost, by week and by skill
   history                  Show the agent's recent changes to the vault
   doctor                   Check the installation
 
@@ -61,6 +66,9 @@ export async function main(argv: string[]): Promise<number> {
       "server-url": { type: "string" },
       url: { type: "string" },
       only: { type: "string" },
+      trials: { type: "string" },
+      arms: { type: "string" },
+      days: { type: "string" },
       force: { type: "boolean" },
       source: { type: "string" },
       "dry-run": { type: "boolean" },
@@ -501,6 +509,25 @@ export async function main(argv: string[]): Promise<number> {
       const { runEval } = await import("./eval/toolcalling.js");
       const report = await runEval(home, { only: values.only, log: console.log });
       return report.passed === report.total ? 0 : 2;
+    }
+
+    case "bench": {
+      const { runBench, ARMS } = await import("./eval/bench.js");
+      const arms = values.arms ? (values.arms.split(",").map((a) => a.trim()) as (typeof ARMS)[number][]) : undefined;
+      const bad = arms?.find((a) => !ARMS.includes(a));
+      if (bad) throw new Error(`Unknown arm '${bad}'. Use any of: ${ARMS.join(", ")}`);
+      const trials = values.trials ? Number(values.trials) : undefined;
+      if (trials !== undefined && (!Number.isInteger(trials) || trials < 1)) throw new Error("--trials must be a whole number of 1 or more.");
+      await runBench(home, { trials, only: values.only, arms, log: console.log });
+      return 0;
+    }
+
+    case "stats": {
+      const { readTurns, summarize, formatSummary } = await import("./eval/metrics.js");
+      const days = values.days ? Number(values.days) : 30;
+      if (!Number.isFinite(days) || days <= 0) throw new Error("--days must be a positive number.");
+      console.log(formatSummary(summarize(readTurns(home, Date.now() - days * 86_400_000), days)));
+      return 0;
     }
 
     case "history": {

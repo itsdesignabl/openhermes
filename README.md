@@ -66,18 +66,18 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 
 ## Install (Windows)
 
-Needs [Node.js](https://nodejs.org) 22.13 or newer and git.
+The full walkthrough, with model setup, checks, optional extras and troubleshooting, is in [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). In short, with [Node.js](https://nodejs.org) 22.13 or newer and Git installed, in PowerShell:
 
 ```bash
 mkdir "C:\Openhermes Programming Files"
 ```
 
 ```bash
-cd /d "C:\Openhermes Programming Files"
+cd "C:\Openhermes Programming Files"
 ```
 
 ```bash
-git clone https://github.com/itsdesignabl/openhermes runtime
+git clone -b main https://github.com/itsdesignabl/openhermes runtime
 ```
 
 ```bash
@@ -96,7 +96,13 @@ npm run build
 node dist\src\cli.js init
 ```
 
-`init` creates the vault and a launcher, `C:\Openhermes Programming Files\openhermes.cmd`. The examples below use it.
+`init` creates the vault and a launcher, `C:\Openhermes Programming Files\openhermes.cmd`. To call it as `openhermes` in the current PowerShell window:
+
+```bash
+Set-Alias openhermes "C:\Openhermes Programming Files\openhermes.cmd"
+```
+
+The examples below use that name.
 
 On macOS and Linux the default home is `~/Openhermes Programming Files` and the launcher is `openhermes.sh`.
 

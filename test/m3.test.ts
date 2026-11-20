@@ -326,7 +326,7 @@ test("docker backend: a missing Docker is reported plainly and commands fail wit
   );
 });
 
-test("ssh backend: the command reaches the remote shell intact, in the work folder, with a time limit", async () => {
+test("ssh backend: the command reaches the remote shell intact, in the work folder, with a time limit", { skip: process.platform === "win32" ? "the stand-in for ssh is a POSIX shell script" : false }, async () => {
   await withApp(
     [{ calls: [cmd(`echo "it's $((6*7))" > note.txt; pwd; cat note.txt`), cmd("sleep 30", 1)] }, { content: "done" }],
     async ({ app, provider, home, outside, asked }) => {
@@ -489,7 +489,7 @@ test("external plugins: tools and hooks from a separate program, with errors, a 
       const startup = app.startupLogs.map((e) => `${e.level}: ${e.message}`);
       assert.ok(startup.includes("info: plugin 'echo': ready, protocol 1"));
       assert.ok(startup.some((l) => /plugin 'clash' failed to load: tool 'read_file' already exists/.test(l)));
-      assert.ok(startup.some((l) => /plugin 'missing' failed to load: could not start/.test(l)));
+      assert.ok(startup.some((l) => /plugin 'missing' failed to load: (could not start|the (plugin )?program stopped)/.test(l)));
       await app.send("use the plugin");
       const spec = provider.seen[0]!.tools.find((t) => t.name === "shout")!;
       assert.deepEqual(spec.parameters, { type: "object", properties: { text: { type: "string" } }, required: ["text"] });

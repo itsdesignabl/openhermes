@@ -28,7 +28,7 @@ function snapshot(dir: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const f of fs.readdirSync(dir, { recursive: true })) {
     const abs = path.join(dir, String(f));
-    if (fs.statSync(abs).isFile()) out[String(f)] = fs.readFileSync(abs, "utf8");
+    if (fs.statSync(abs).isFile()) out[String(f).split(path.sep).join("/")] = fs.readFileSync(abs, "utf8");
   }
   return out;
 }
@@ -257,7 +257,7 @@ test("tool servers: their tools join the agent's, need approval until allowed, a
     const startup = app.startupLogs.map((e) => `${e.level}: ${e.message}`);
     assert.ok(startup.includes("info: tool server 'calc' connected with 5 tools"));
     assert.ok(startup.includes("info: tool server 'limited' connected with 1 tool"));
-    assert.ok(startup.some((l) => /error: tool server 'broken' failed to connect: could not start/.test(l)));
+    assert.ok(startup.some((l) => /error: tool server 'broken' failed to connect: (could not start|the program stopped)/.test(l)));
     assert.ok(startup.some((l) => /error: tool server 'empty' failed to connect: it needs either a command or a url/.test(l)));
     assert.ok(!startup.some((l) => l.includes("listening on stdio")), "ordinary server chatter is not logged");
     assert.deepEqual([...app.registry.tools.keys()].filter((n) => n.includes("__")), ["calc__add", "calc__get_weather", "calc__picture", "calc__boom", "calc__die", "limited__add"]);

@@ -16,7 +16,7 @@ import sys
 event = json.load(sys.stdin)
 log = os.path.join(os.environ["OPENHERMES_HOME"], "data", "logs", "commands.log")
 os.makedirs(os.path.dirname(log), exist_ok=True)
-with open(log, "a", encoding="utf-8") as f:
+with open(log, "a", encoding="utf-8", newline="\n") as f:
     f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {event.get('agent')} {event['args']['command']}\n")
 
 # To refuse instead, print: {"decision": "deny", "reason": "why"}

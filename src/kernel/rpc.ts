@@ -26,6 +26,8 @@ export class JsonRpcProcess {
   private nextId = 1;
   private waiting = new Map<number, Waiting>();
   private closing = false;
+  private answered = false;
+  private lastStderr = "";
 
   constructor(private o: RpcOptions) {}
 
@@ -35,6 +37,8 @@ export class JsonRpcProcess {
 
   start(): void {
     this.closing = false;
+    this.answered = false;
+    this.lastStderr = "";
     // On Windows, launchers such as npx are .cmd files and are only found through the shell,
     // which does not quote arguments itself.
     const viaShell = process.platform === "win32";
@@ -60,11 +64,19 @@ export class JsonRpcProcess {
     });
     child.on("exit", (code) => {
       if (this.child === child) this.child = undefined;
-      failAll(`the program stopped (exit code ${code})`);
+      // A program that ends before it ever answered usually could not start at all (on Windows a missing
+      // program shows up this way, through the shell), so what it printed is the useful part.
+      const report = () => failAll(`the program stopped (exit code ${code})${!this.answered && this.lastStderr ? `: ${this.lastStderr.slice(0, 300)}` : ""}`);
+      // its last words may still be on their way through the pipe
+      if (this.answered) report();
+      else setTimeout(report, 100);
       if (!this.closing) this.o.onExit?.(code);
     });
     child.stdin!.on("error", () => {});
-    readline.createInterface({ input: child.stderr! }).on("line", (line) => this.o.onStderr?.(line));
+    readline.createInterface({ input: child.stderr! }).on("line", (line) => {
+      if (line.trim()) this.lastStderr = line.trim();
+      this.o.onStderr?.(line);
+    });
     readline.createInterface({ input: child.stdout! }).on("line", (line) => {
       if (!line.trim()) return;
       let msg: any;
@@ -75,6 +87,7 @@ export class JsonRpcProcess {
       }
       if (msg.id !== undefined && msg.method === undefined && this.waiting.has(msg.id)) {
         const w = this.waiting.get(msg.id)!;
+        this.answered = true;
         this.waiting.delete(msg.id);
         clearTimeout(w.timer);
         if (msg.error) w.reject(new Error(String(msg.error.message ?? "the program reported an error")));

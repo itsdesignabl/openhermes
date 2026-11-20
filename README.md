@@ -7,7 +7,7 @@ A self-hosted personal AI agent that brings together two open-source approaches:
 
 Everything the agent knows and does lives as Markdown in a local vault you can open in Obsidian, inside one self-contained folder. Delete that folder and the agent and all its data are gone.
 
-**Status:** all planned milestones, M0 to M5, are built. Nothing has yet been run with a real model or on Windows; see [Known gaps](#known-gaps).
+**Status:** all planned milestones, M0 to M5, are built. The automated tests pass on Linux and Windows, but nothing has yet been run with a real model, and nobody has installed and used it on Windows; see [Known gaps](#known-gaps).
 
 ## What works in M0
 
@@ -350,6 +350,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 
 ## Known gaps
 
+- **Windows has only been exercised by the automated tests**, which run on every push. The install steps, the terminal chat and the gateway have not been used by a person on Windows.
 - **Nothing has been run against a real model, or the real Telegram, Discord or Slack services.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
 - **Commands are not sandboxed by default.** With `backend.type: local`, a shell command can touch any path, including the settings files the agent's file tools are barred from. Commands not on the allowlist ask for approval first. Use the Docker backend to confine them.

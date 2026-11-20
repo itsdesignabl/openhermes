@@ -287,6 +287,19 @@ Commands that are not on the allowlist follow the `command.sandboxed` policy whe
 
 If Docker is not running, commands fail with a message. They never fall back to running on your computer.
 
+## How keys are stored
+
+Bot tokens and API keys you store with `openhermes secret set` are encrypted in `secrets\keys.enc.json`.
+
+| System | Protection |
+|---|---|
+| Windows | Sealed for your Windows account by Windows itself. Nothing to remember, and nothing to set up |
+| macOS, Linux | Encrypted with a passphrase if you set the `OPENHERMES_PASSPHRASE` environment variable; otherwise stored in plain text, and `openhermes doctor` says so |
+
+- Keys saved in plain text by an earlier version are encrypted the next time they are used, and the plain-text file is removed.
+- On Windows, the keys can only be opened by the same account on the same computer. If you copy the home folder to another computer, or reinstall Windows, store the keys again with `openhermes secret set`. Everything else in the folder carries over.
+- `openhermes secret list` shows the names of stored keys and how they are protected. It never prints a value.
+
 ## Scheduled work
 
 - **Heartbeat:** write items in `vault\Agents\main\HEARTBEAT.md`. While the list is empty nothing runs. Interval, target chat and active hours are in `agent.md` in the same folder.
@@ -376,7 +389,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **The gateway does not start with Windows.** Run `openhermes gateway start` after logging in.
 - **Missed schedules are not caught up.** A job due while the gateway was off is skipped, except a one-time `at` job less than a day late.
 - **Only text messages** are handled in chats; images, voice and files are ignored.
-- **Keys are stored unencrypted** in `secrets\keys.json`.
+- **Key encryption has limits.** It protects stored keys when the folder is copied, backed up, synced or read from another account. It does not protect them from a program running as you, which can ask Windows to open them the same way OpenHermes does. The gateway's own access token in `secrets\gateway-token` is not encrypted; it only works on this computer.
 - **Node.js and git are installed outside the home folder.** A portable bundle is planned.
 - Approvals for actions during a conversation (running a command, importing a file) are still asked live in the chat, not through `Inbox\`.
 

@@ -250,19 +250,4 @@ export function listAgents(home: Home): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
 }
 
-export function writeSecret(home: Home, name: string, value: string): void {
-  const file = path.join(home.secrets, "keys.json");
-  fs.mkdirSync(home.secrets, { recursive: true });
-  const keys = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>) : {};
-  if (value) keys[name] = value;
-  else delete keys[name];
-  fs.writeFileSync(file, JSON.stringify(keys, null, 2), { mode: 0o600 });
-}
-
-export function readSecret(home: Home, name: string): string | undefined {
-  if (!name) return undefined;
-  const file = path.join(home.secrets, "keys.json");
-  if (!fs.existsSync(file)) return undefined;
-  const keys = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>;
-  return keys[name];
-}
+export { readSecret, writeSecret } from "./secrets.js";

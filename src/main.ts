@@ -424,12 +424,12 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     case "secret": {
-      const { writeSecret } = await import("./kernel/config.js");
+      const { writeSecret, listSecretNames, secretsStatus } = await import("./kernel/secrets.js");
       const [sub, name] = rest;
-      const file = path.join(home.secrets, "keys.json");
       if (sub === "list") {
-        const keys = fs.existsSync(file) ? Object.keys(JSON.parse(fs.readFileSync(file, "utf8"))) : [];
-        console.log(keys.length ? keys.join("\n") : "No secrets stored.");
+        const names = listSecretNames(home);
+        console.log(names.length ? names.join("\n") : "No keys stored.");
+        console.log(`\n(${secretsStatus(home).summary})`);
         return 0;
       }
       if (sub === "remove" && name) {
@@ -449,7 +449,8 @@ export async function main(argv: string[]): Promise<number> {
         value = value.trim();
         if (!value) throw new Error("No value given.");
         writeSecret(home, name, value);
-        console.log(`Stored ${name} in ${home.display(file)}.`);
+        const status = secretsStatus(home);
+        console.log(`Stored ${name}. The secrets folder now holds ${status.summary.replace(/\.$/, "")}.`);
         return 0;
       }
       throw new Error("Use: openhermes secret set <name> | list | remove <name>");
@@ -577,6 +578,13 @@ export async function main(argv: string[]): Promise<number> {
           line(!failure, failure ? failure.message : `plugin '${name}' loaded`);
         }
         await app.stop();
+      }
+      {
+        const { secretsStatus } = await import("./kernel/secrets.js");
+        const status = secretsStatus(home);
+        // unencrypted keys are worth knowing about but are not a fault; a store that cannot be opened is
+        if (status.problem && status.protection === "none" && status.count) console.log(`warn  stored keys: ${status.summary}`);
+        else line(!status.problem, `stored keys: ${status.summary}`);
       }
       const probe = path.join(home.data, ".write-test");
       try {

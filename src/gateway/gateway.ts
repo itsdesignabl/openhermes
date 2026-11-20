@@ -88,7 +88,15 @@ export class Gateway {
       if (known && !known.enabled) continue;
       const channel = factory({
         config: () => this.app.config,
-        secret: (secretName) => readSecret(this.app.home, secretName),
+        secret: (secretName) => {
+          try {
+            return readSecret(this.app.home, secretName);
+          } catch (err) {
+            // a key store that cannot be opened must not take the gateway down; the channel reports the missing token
+            this.log("error", (err as Error).message);
+            return undefined;
+          }
+        },
         onMessage: (m) => void this.handleInbound(m).catch((err) => this.log("error", `${m.channel}: ${(err as Error).message}`)),
         log: (level, message) => this.log(level, message),
       });

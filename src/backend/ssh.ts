@@ -1,6 +1,6 @@
 import type { Config } from "../kernel/config.js";
 import { exec } from "./exec.js";
-import type { Backend, RunResult } from "./types.js";
+import { hitTimeLimit, type Backend, type RunResult } from "./types.js";
 
 /** Quote a string for a POSIX shell. */
 export function shellQuote(s: string): string {
@@ -36,8 +36,9 @@ export class SshBackend implements Backend {
   async run(command: string, timeoutS: number): Promise<RunResult> {
     if (!this.cfg.host) return { code: null, output: "backend.ssh.host is not set in System/config.md." };
     const remote = `mkdir -p ${shellQuote(this.cfg.workdir)} && cd ${shellQuote(this.cfg.workdir)} && timeout -s KILL ${timeoutS} sh -c ${shellQuote(command)}`;
+    const started = Date.now();
     const result = await exec(this.cfg.binary, [...this.baseArgs(), remote], { timeoutS: timeoutS + 20 });
-    if (result.code === 137) return { code: null, output: `${result.output}\n[stopped: exceeded ${timeoutS}s]`.trim() };
+    if (hitTimeLimit(result.code, started, timeoutS)) return { code: null, output: `${result.output}\n[stopped: exceeded ${timeoutS}s]`.trim() };
     if (result.code === 255) return { code: null, output: `Could not reach ${this.cfg.host} over SSH: ${result.output.split("\n").at(-1)}` };
     return result;
   }

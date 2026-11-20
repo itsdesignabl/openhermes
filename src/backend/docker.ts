@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { Config } from "../kernel/config.js";
 import type { Home } from "../kernel/home.js";
 import { exec } from "./exec.js";
-import type { Backend, RunResult } from "./types.js";
+import { hitTimeLimit, type Backend, type RunResult } from "./types.js";
 
 /**
  * Runs commands in a Docker container that can see only the workspace folder (read-write)
@@ -67,8 +67,9 @@ export class DockerBackend implements Backend {
       return { code: null, output: (err as Error).message };
     }
     // `timeout` inside the container ends the command itself; stopping only the docker client would leave it running
+    const started = Date.now();
     const result = await this.docker(["exec", "-w", "/workspace", this.container, "timeout", "-s", "KILL", String(timeoutS), "sh", "-c", command], timeoutS + 15);
-    if (result.code === 137) return { code: null, output: `${result.output}\n[stopped: exceeded ${timeoutS}s]`.trim() };
+    if (hitTimeLimit(result.code, started, timeoutS)) return { code: null, output: `${result.output}\n[stopped: exceeded ${timeoutS}s]`.trim() };
     return result;
   }
 

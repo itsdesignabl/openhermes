@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { App } from "../src/app.js";
 import { DockerBackend } from "../src/backend/docker.js";
 import { exec } from "../src/backend/exec.js";
+import { hitTimeLimit } from "../src/backend/types.js";
 import { shellQuote } from "../src/backend/ssh.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { ConfigSchema } from "../src/kernel/config.js";
@@ -354,6 +355,10 @@ test("ssh backend: the command reaches the remote shell intact, in the work fold
     },
   );
   assert.equal(shellQuote("a'b"), `'a'\\''b'`);
+  // different `timeout` programs report a kill as 137 or 124; a quick exit with those codes is the command's own
+  const longAgo = Date.now() - 5000;
+  assert.ok(hitTimeLimit(137, longAgo, 5) && hitTimeLimit(124, longAgo, 5));
+  assert.ok(!hitTimeLimit(124, Date.now(), 5) && !hitTimeLimit(1, longAgo, 5) && !hitTimeLimit(null, longAgo, 5));
 });
 
 test("a command that leaves a child running returns when the command itself ends", { skip: process.platform === "win32" ? "uses a POSIX shell" : false }, async () => {

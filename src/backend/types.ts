@@ -18,3 +18,12 @@ export interface Backend {
 }
 
 export const MAX_OUTPUT = 200_000;
+
+/**
+ * Whether a command wrapped in `timeout -s KILL` was ended by it. The exit code differs between
+ * implementations (137 from GNU and BusyBox, 124 from others), and a command may also return those
+ * codes by itself, so the code only counts once the time limit has actually passed.
+ */
+export function hitTimeLimit(code: number | null, startedMs: number, timeoutS: number): boolean {
+  return (code === 137 || code === 124) && Date.now() - startedMs >= timeoutS * 1000 - 250;
+}

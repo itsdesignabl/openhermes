@@ -354,7 +354,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
 - **Commands are not sandboxed by default.** With `backend.type: local`, a shell command can touch any path, including the settings files the agent's file tools are barred from. Commands not on the allowlist ask for approval first. Use the Docker backend to confine them.
 - **The Docker backend was tested on Linux only**, with a real Docker daemon and an Alpine image. It has not been run with Docker Desktop on Windows, and the default image `python:3.12-slim` could not be downloaded in the test environment.
-- **The SSH backend was tested against a stand-in**, not a real remote machine.
+- **The SSH backend was tested against a stand-in**, not a real remote machine. When a command there is stopped at its time limit, programs it had started may keep running on that machine, depending on its `timeout` program.
 - **The scanner matches known patterns.** It catches the common attack shapes and is not a guarantee. Read an imported skill before trusting it.
 - **Hooks and plugins run on your computer without a sandbox,** with your rights.
 - **The importers were written from descriptions of the OpenClaw and Hermes folder layouts**, not tested against real installations. Run with `--dry-run` first and check the report.

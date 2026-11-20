@@ -121,40 +121,51 @@ export async function loadPlugins(
       await bus.emit("log", { level: "error", message: `plugin '${spec.name}' failed to load: ${(err as Error).message}` });
     }
   }
-  // Tool servers are connected in parallel: one slow or broken server does not hold up the others.
-  await Promise.all(
+  // Tool servers are connected in parallel, so one slow or broken server does not hold up the others.
+  // Their tools are then added in the order of the settings, not in the order the servers happened to
+  // answer: the model sees the same tool list on every start, and a name two servers share always
+  // goes to the one listed first.
+  const connections = await Promise.all(
     config().mcp_servers.map(async (spec) => {
       let client: McpClient | undefined;
       try {
         client = new McpClient(home, spec, secret(spec.token_secret), log);
         const tools = (await client.listTools()).filter((t) => !spec.tools || spec.tools.includes(t.name));
-        for (const t of tools) {
-          const name = mcpToolName(spec.name, t.name);
-          if (registry.tools.has(name)) {
-            log("warn", `tool server '${spec.name}': the tool '${t.name}' is skipped because the name ${name} is taken`);
-            continue;
-          }
-          const c = client;
-          registry.tools.set(name, {
-            name,
-            // descriptions come from the server and are shown to the model: keep them short and labelled
-            description: `[tool server ${spec.name}] ${t.description.replace(/\s+/g, " ").slice(0, 800)}`,
-            schema: z.record(z.string(), z.unknown()),
-            jsonSchema: t.inputSchema,
-            run: async (args, ctx) => {
-              if (!ctx.policy.mcpAllowed(name)) await ctx.policy.check("mcp.call", `use ${t.name} from the tool server '${spec.name}': ${JSON.stringify(args).slice(0, 300)}`, name);
-              return c.callTool(t.name, args);
-            },
-          });
-        }
-        registry.mcp.push(client);
-        registry.loaded.push(`mcp:${spec.name}`);
-        log("info", `tool server '${spec.name}' connected with ${tools.length} tool${tools.length === 1 ? "" : "s"}`);
+        return { spec, client, tools };
       } catch (err) {
         await client?.stop().catch(() => {});
-        log("error", `tool server '${spec.name}' failed to connect: ${(err as Error).message}`);
+        return { spec, error: (err as Error).message };
       }
     }),
   );
+  for (const conn of connections) {
+    const { spec } = conn;
+    if (!("client" in conn) || !conn.client) {
+      log("error", `tool server '${spec.name}' failed to connect: ${conn.error}`);
+      continue;
+    }
+    const client = conn.client;
+    for (const t of conn.tools) {
+      const name = mcpToolName(spec.name, t.name);
+      if (registry.tools.has(name)) {
+        log("warn", `tool server '${spec.name}': the tool '${t.name}' is skipped because the name ${name} is taken`);
+        continue;
+      }
+      registry.tools.set(name, {
+        name,
+        // descriptions come from the server and are shown to the model: keep them short and labelled
+        description: `[tool server ${spec.name}] ${t.description.replace(/\s+/g, " ").slice(0, 800)}`,
+        schema: z.record(z.string(), z.unknown()),
+        jsonSchema: t.inputSchema,
+        run: async (args, ctx) => {
+          if (!ctx.policy.mcpAllowed(name)) await ctx.policy.check("mcp.call", `use ${t.name} from the tool server '${spec.name}': ${JSON.stringify(args).slice(0, 300)}`, name);
+          return client.callTool(t.name, args);
+        },
+      });
+    }
+    registry.mcp.push(client);
+    registry.loaded.push(`mcp:${spec.name}`);
+    log("info", `tool server '${spec.name}' connected with ${conn.tools.length} tool${conn.tools.length === 1 ? "" : "s"}`);
+  }
   return registry;
 }

@@ -256,6 +256,7 @@ export function secretsStatus(home: Home): SecretsStatus {
   const sealed = fs.existsSync(sealedFile(home));
   const protection: Protection = sealed ? readSealed(home)!.protection : fs.existsSync(plainFile(home)) ? "none" : defaultProtection();
   const n = `${names.length} key${names.length === 1 ? "" : "s"}`;
+  if (!names.length && protection !== "none") return { protection, count: 0, summary: "no keys stored yet" };
   if (protection === "dpapi") return { protection, count: names.length, summary: `${n}, encrypted for this Windows account` };
   if (protection === "passphrase") return { protection, count: names.length, summary: `${n}, encrypted with the passphrase in ${PASSPHRASE_ENV}` };
   const how = process.platform === "win32" ? "" : ` Set ${PASSPHRASE_ENV} to a passphrase to encrypt them.`;

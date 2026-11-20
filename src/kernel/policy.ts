@@ -1,0 +1,52 @@
+import type { Policies, PolicyAction, PolicyValue } from "./config.js";
+
+/** true: allow once. "always": allow, and for commands add it to the allowlist. false: decline. */
+export type Approval = boolean | "always";
+export type Approver = (action: PolicyAction, detail: string) => Promise<Approval>;
+
+export class PolicyDenied extends Error {
+  constructor(action: string, reason: string) {
+    super(`Not allowed (${action}): ${reason}`);
+    this.name = "PolicyDenied";
+  }
+}
+
+/** Decides auto / ask / deny for each kind of action, asking the user through the active channel. */
+export class PolicyEngine {
+  constructor(
+    private getPolicies: () => Policies,
+    private approver: Approver,
+    /** Called when the user answers "always": the action and what to remember for it (a command, or a tool name). */
+    private onAlways: (action: PolicyAction, key: string) => void = () => {},
+  ) {}
+
+  valueOf(action: PolicyAction): PolicyValue {
+    return this.getPolicies().policies[action];
+  }
+
+  isAllowlisted(command: string): boolean {
+    const cmd = command.trim();
+    // Chaining or redirection could smuggle a second command past a prefix match.
+    if (/[;&|<>`\n]|\$\(/.test(cmd)) return false;
+    return this.getPolicies().command_allowlist.some((entry) => {
+      const e = entry.trim();
+      return e.length > 0 && (cmd === e || cmd.startsWith(e + " "));
+    });
+  }
+
+  mcpAllowed(tool: string): boolean {
+    return this.getPolicies().mcp_allowlist.includes(tool);
+  }
+
+  /** `alwaysKey` is what an "always" answer adds to the allowlist: the command, or the tool name. */
+  async check(action: PolicyAction, detail: string, alwaysKey?: string): Promise<void> {
+    const value = this.valueOf(action);
+    if (value === "auto") return;
+    if (value === "deny") throw new PolicyDenied(action, "policy is set to deny");
+    const answer = await this.approver(action, detail);
+    if (!answer) throw new PolicyDenied(action, "the user declined");
+    if (answer !== "always" || !alwaysKey) return;
+    if (action === "mcp.call") this.onAlways(action, alwaysKey);
+    else if (!/[;&|<>`\n]|\$\(/.test(alwaysKey)) this.onAlways(action, alwaysKey.trim());
+  }
+}

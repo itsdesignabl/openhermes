@@ -16,7 +16,7 @@ One folder, `C:\Openhermes Programming Files`, holding everything:
 | `vault` | The agent's notes: personality, memory, skills, settings. This is what you open in Obsidian |
 | `models` | Model files, if you use the bundled model server |
 | `data` | Search index, logs, measurements |
-| `secrets` | Bot tokens and keys |
+| `secrets` | Bot tokens and keys, encrypted for your Windows account |
 | `workspace` | Scratch area where the agent runs commands |
 
 Deleting that folder removes the agent and all of its data. See [Uninstalling](#uninstalling) for the few things that live outside it.
@@ -258,7 +258,7 @@ It does not start with Windows. Run `openhermes gateway start` after you log in.
 ### Telegram: chat from your phone
 
 1. In Telegram, message `@BotFather`, send `/newbot`, follow the prompts, and copy the token it gives you.
-2. Store the token (paste it when asked):
+2. Store the token (paste it when asked). It is saved encrypted for your Windows account:
 
 ```bash
 openhermes secret set telegram_bot_token
@@ -321,7 +321,7 @@ npm install
 npm run build
 ```
 
-Your vault, settings and keys are not touched by an update. If you use the Obsidian pane, run `openhermes obsidian install` again to update it.
+Your vault, settings and keys are not touched by an update. Keys saved by a version from before they were encrypted are encrypted the first time they are used. If you use the Obsidian pane, run `openhermes obsidian install` again to update it.
 
 ## Uninstalling
 
@@ -353,6 +353,7 @@ That removes the program, the vault, the memory, the keys and the logs. What it 
 | "Model endpoint returned 404" | The model name in the settings does not match | Use the exact name shown by `ollama list` |
 | "Port 18789 is in use" | A gateway is already running | `openhermes gateway status`, then `openhermes gateway stop` |
 | The Telegram bot does not answer | The channel is off, or the token is wrong | `openhermes gateway status` shows the channel's state and the reason |
+| "encrypted for a different Windows account or computer" | The home folder was copied from another computer or account, or Windows was reinstalled | Store each key again with `openhermes secret set <name>` |
 | A change in `config.md` has no effect | A typo made the settings invalid, so the old ones are kept | `openhermes doctor` names the invalid line |
 
 If something else goes wrong, these three outputs show what is happening and are the ones to include in a bug report:

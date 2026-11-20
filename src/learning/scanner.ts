@@ -28,7 +28,7 @@ const RULES: Rule[] = [
   { severity: "block", rule: "runs hidden (encoded) commands", pattern: /\b(eval|exec)\s*\(\s*(atob|Buffer\.from|base64\.b64decode|bytes\.fromhex|codecs\.decode)\b/ },
   { severity: "block", rule: "opens a remote-control connection", pattern: /\/dev\/tcp\/|\bnc(at)?\b[^\n]*\s(-e|--exec)\s|bash\s+-i\s+>&/ },
   { severity: "block", rule: "reads passwords, keys or browser data", pattern: /(~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE)[\\/]\.(ssh|aws|gnupg|kube|docker)\b|\bid_(rsa|ed25519|ecdsa)\b|\.aws[\\/]credentials|wallet\.dat|(Chrome|Chromium|Edge|Firefox)[^\n]*(Login Data|Cookies|logins\.json)/i },
-  { severity: "block", rule: "reads this agent's own keys", pattern: /secrets[\\/]keys\.json|gateway-token/i },
+  { severity: "block", rule: "reads this agent's own keys", pattern: /secrets[\\/]keys(\.enc)?\.json|gateway-token/i },
   { severity: "block", rule: "deletes large parts of the disk", pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(--no-preserve-root\s+)?(\/|~|\$HOME|\/\*)(\s|$)|\bmkfs(\.\w+)?\s|\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|disk)|\bformat\s+[a-z]:|\b(del|rd|rmdir)\s+\/s\b[^\n]*\s[a-z]:\\(\s|$)/i },
   { severity: "block", rule: "tries to change the agent's approval rules", pattern: /System[\\/]policies\.md|command_allowlist/i },
   { severity: "block", rule: "contains instructions aimed at overriding the agent's rules", markdownOnly: true, pattern: /ignore (all |any )?(of )?(the |your )?(previous|prior|above|earlier) (instructions|rules|messages)|disregard (your|the|all) (system prompt|rules|instructions)|do not (tell|inform|mention (this |it )?to|notify) the user|without (telling|asking|informing|notifying) the user/i },

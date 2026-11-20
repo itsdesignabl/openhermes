@@ -216,6 +216,7 @@ rl.on("line", (line) => {
   const ok = (result) => send({ jsonrpc: "2.0", id: r.id, result });
   if (r.method === "initialize") {
     if (r.params.protocolVersion !== "2025-06-18" || r.params.clientInfo.name !== "openhermes") return send({ jsonrpc: "2.0", id: r.id, error: { code: -32602, message: "bad handshake" } });
+    if (process.env.STAND_IN_SLOW) return void setTimeout(() => ok({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "stand-in", version: "1" } }), 400);
     send({ jsonrpc: "2.0", id: "srv-1", method: "roots/list" }); // a request to the client, which must be refused politely
     return ok({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "stand-in", version: "1" } });
   }
@@ -242,7 +243,8 @@ test("tool servers: their tools join the agent's, need approval until allowed, a
   const { home, cleanup } = tempHome();
   w(path.join(home.runtime, "stand-in-mcp.cjs"), MCP_STDIO);
   const server = (name: string, extra: object = {}) => ({ name, command: ["node", path.join(home.runtime, "stand-in-mcp.cjs")], env: { STAND_IN: "yes" }, ...extra });
-  const mcp_servers = [server("calc"), server("limited", { tools: ["add"] }), { name: "broken", command: ["this-program-does-not-exist"] }, { name: "empty" }];
+  // "calc" is listed first but answers last
+  const mcp_servers = [server("calc", { env: { STAND_IN: "yes", STAND_IN_SLOW: "1" } }), server("limited", { tools: ["add"] }), { name: "broken", command: ["this-program-does-not-exist"] }, { name: "empty" }];
   w(path.join(home.vault, "System", "config.md"), `---\n${JSON.stringify({ learning: { enabled: false }, mcp_servers })}\n---\n`);
   const provider = new ScriptedProvider([
     { calls: [call("calc__add", { a: 19, b: 23 }), call("calc__add", { a: 1, b: 1 }), call("calc__get_weather", { city: "Bergen" })] },
@@ -260,7 +262,8 @@ test("tool servers: their tools join the agent's, need approval until allowed, a
     assert.ok(startup.some((l) => /error: tool server 'broken' failed to connect: (could not start|the program stopped)/.test(l)));
     assert.ok(startup.some((l) => /error: tool server 'empty' failed to connect: it needs either a command or a url/.test(l)));
     assert.ok(!startup.some((l) => l.includes("listening on stdio")), "ordinary server chatter is not logged");
-    assert.deepEqual([...app.registry.tools.keys()].filter((n) => n.includes("__")), ["calc__add", "calc__get_weather", "calc__picture", "calc__boom", "calc__die", "limited__add"]);
+    assert.deepEqual([...app.registry.tools.keys()].filter((n) => n.includes("__")), ["calc__add", "calc__get_weather", "calc__picture", "calc__boom", "calc__die", "limited__add"], "tools are in the order of the settings, whichever server answered first");
+    assert.deepEqual(app.registry.loaded.filter((n) => n.startsWith("mcp:")), ["mcp:calc", "mcp:limited"]);
 
     await app.send("use the calculator");
     const spec = provider.seen[0]!.tools.find((t) => t.name === "calc__add")!;

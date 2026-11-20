@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { App } from "../src/app.js";
 import { DockerBackend } from "../src/backend/docker.js";
+import { exec } from "../src/backend/exec.js";
 import { shellQuote } from "../src/backend/ssh.js";
 import { Gateway } from "../src/gateway/gateway.js";
 import { ConfigSchema } from "../src/kernel/config.js";
@@ -353,6 +354,16 @@ test("ssh backend: the command reaches the remote shell intact, in the work fold
     },
   );
   assert.equal(shellQuote("a'b"), `'a'\\''b'`);
+});
+
+test("a command that leaves a child running returns when the command itself ends", { skip: process.platform === "win32" ? "uses a POSIX shell" : false }, async () => {
+  const started = Date.now();
+  const left = await exec("sleep 20 & echo started; exit 3", [], { shell: true, timeoutS: 30 });
+  assert.deepEqual(left, { code: 3, output: "started" });
+  // a time-limit helper that kills only the shell, as some `timeout` programs do, leaving `sleep` behind
+  const killed = await exec("sh -c 'sleep 20; echo never' & pid=$!; sleep 0.3; kill -KILL $pid; wait $pid; exit 137", [], { shell: true, timeoutS: 30 });
+  assert.equal(killed.code, 137);
+  assert.ok(Date.now() - started < 5000, "neither call waited for the leftover sleep");
 });
 
 test("an unknown backend refuses commands instead of guessing", async () => {

@@ -134,6 +134,41 @@ test("the agent cannot change its own policies, secrets or program", async () =>
   );
 });
 
+test("a link or a different capitalisation cannot read or overwrite stored keys", async () => {
+  await withApp([], async ({ app, provider, home }) => {
+    const keys = '{"telegram_bot_token":"SENTINEL-TOKEN"}';
+    fs.writeFileSync(path.join(home.secrets, "keys.json"), keys);
+    fs.writeFileSync(path.join(home.secrets, "gateway-token"), "SENTINEL-GATEWAY");
+    // A directory link, because a junction works on Windows without extra privileges. From the workspace
+    // it looks like an ordinary project folder; the files in it are the key store.
+    fs.symlinkSync(home.secrets, path.join(home.workspace, "leak"), "junction");
+    provider["steps"].push(
+      {
+        calls: [
+          { name: "read_file", args: { path: "workspace/leak/keys.json" } },
+          { name: "read_file", args: { path: "workspace/leak/gateway-token" } },
+          { name: "list_files", args: { path: "workspace/leak" } },
+          { name: "list_files", args: { path: "../secrets" } },
+          { name: "read_file", args: { path: "../Secrets/keys.json" } },
+          { name: "read_file", args: { path: "../Secrets/gateway-token" } },
+          { name: "write_file", args: { path: "workspace/leak/keys.json", content: "{}" } },
+          { name: "edit_file", args: { path: "workspace/leak/gateway-token", old_text: "SENTINEL-GATEWAY", new_text: "STOLEN" } },
+        ],
+      },
+      { content: "ok" },
+    );
+    await app.send("look through the project folder");
+    const outputs = provider.lastToolOutputs();
+    assert.equal(outputs.length, 8);
+    for (const output of outputs) {
+      assert.doesNotMatch(output, /SENTINEL/);
+      assert.match(output, /^Error:/);
+    }
+    assert.equal(fs.readFileSync(path.join(home.secrets, "keys.json"), "utf8"), keys);
+    assert.equal(fs.readFileSync(path.join(home.secrets, "gateway-token"), "utf8"), "SENTINEL-GATEWAY");
+  });
+});
+
 test("import copies an outside file in, leaves the original alone, and asks only when the agent chose the path", async () => {
   await withApp([], async ({ app, provider, outside, home, asked }) => {
     const named = path.join(outside, "letter.txt");

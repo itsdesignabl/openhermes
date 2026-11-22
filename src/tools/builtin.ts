@@ -17,10 +17,24 @@ export function writeAtomic(file: string, content: string | Buffer): void {
   fs.renameSync(tmp, file);
 }
 
-/** Which policy governs a write to this path. */
+/** Home-relative path of where `abs` really is, after symlinks and junctions, in lower case. */
+function realHomePath(ctx: ToolContext, abs: string): string {
+  return path.relative(ctx.home.realpath(ctx.home.root), ctx.home.realpath(abs)).split(path.sep).join("/").toLowerCase();
+}
+
+/** Stored keys and the gateway token. The check uses the path after links are followed, with case folded. */
+function isSecrets(rel: string): boolean {
+  return rel === "secrets" || rel.startsWith("secrets/");
+}
+
+function assertNotSecret(ctx: ToolContext, abs: string): void {
+  if (isSecrets(realHomePath(ctx, abs))) throw new Error("Secrets cannot be read.");
+}
+
+/** Which policy governs a write to this path. The directory that is really written decides, not the name the caller used. */
 function writeAction(ctx: ToolContext, abs: string): PolicyAction | null {
-  const rel = path.relative(ctx.home.vault, abs).split(path.sep).join("/");
-  if (rel.startsWith("..")) return null; // workspace/ and other home areas: no approval needed
+  const rel = path.relative(ctx.home.realpath(ctx.home.vault), ctx.home.realpath(abs)).split(path.sep).join("/");
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null; // workspace/ and other home areas: no approval needed
   if (rel.startsWith("Memory/")) return "memory.edit";
   if (rel.startsWith("Skills/")) {
     const skillDir = path.join(ctx.home.vault, "Skills", rel.split("/")[1] ?? "");
@@ -40,14 +54,16 @@ function hasScripts(dir: string): boolean {
  * settings and policies (System/), per-agent settings (agent.md), the Inbox, or the vault history.
  */
 function protectSystem(ctx: ToolContext, abs: string): void {
-  const rel = path.relative(ctx.home.root, abs).split(path.sep).join("/");
-  const lower = rel.toLowerCase();
+  const shown = path.relative(ctx.home.root, abs).split(path.sep).join("/");
+  // Decide from the path after links are followed. A link inside the workspace can point at
+  // secrets or at a file the agent is not allowed to change, and the name it was given would not say so.
+  const lower = realHomePath(ctx, abs);
   const writable = lower.startsWith("vault/") || lower.startsWith("workspace/");
   const controlled =
     lower.startsWith("vault/system/") || lower.startsWith("vault/inbox/") || lower.startsWith("vault/.git/") || lower.startsWith("vault/.obsidian/") ||
     /^vault\/agents\/[^/]+\/agent\.md$/.test(lower);
   if (!writable || controlled) {
-    throw new Error(`The agent may not change ${rel}. Ask the user to edit it.`);
+    throw new Error(`The agent may not change ${shown}. Ask the user to edit it.`);
   }
 }
 
@@ -58,7 +74,7 @@ const readFile = defineTool({
   schema: z.object({ path: z.string() }),
   async run({ path: p }, ctx) {
     const abs = resolveUserPath(ctx, p);
-    if (ctx.home.display(abs).startsWith("secrets/")) throw new Error("Secrets cannot be read.");
+    assertNotSecret(ctx, abs);
     if (!fs.existsSync(abs)) throw new Error(`No such file: ${p}`);
     if (fs.statSync(abs).isDirectory()) throw new Error(`${p} is a folder. Use list_files.`);
     const text = fs.readFileSync(abs, "utf8");
@@ -73,6 +89,7 @@ const listFiles = defineTool({
   schema: z.object({ path: z.string().default(".") }),
   async run({ path: p }, ctx) {
     const abs = resolveUserPath(ctx, p);
+    assertNotSecret(ctx, abs);
     if (!fs.existsSync(abs)) throw new Error(`No such folder: ${p}`);
     const entries = fs
       .readdirSync(abs, { withFileTypes: true })

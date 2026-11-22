@@ -64,6 +64,14 @@ export class Home {
   display(abs: string): string {
     return path.relative(this.root, abs).split(path.sep).join("/");
   }
+
+  /**
+   * The path after following symlinks and junctions. A file that does not exist yet keeps its
+   * missing tail attached to the deepest directory that does, so a link in that directory still counts.
+   */
+  realpath(abs: string): string {
+    return realpathDeepest(path.resolve(abs));
+  }
 }
 
 function isInside(root: string, target: string): boolean {

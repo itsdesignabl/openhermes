@@ -571,6 +571,14 @@ export async function main(argv: string[]): Promise<number> {
       }
       {
         const app = await App.start(home, { watch: false });
+        {
+          const b = app.describeContext();
+          const share = Math.round((b.conversationTokens / b.windowTokens) * 100);
+          const text = `context: of ${b.windowTokens} tokens, about ${b.fixedTokens} go to instructions, memory and tools, ${b.reserveTokens} are kept for the answer, and ${b.conversationTokens} (${share}%) are left for the conversation`;
+          // under a quarter of the window for the conversation leaves little room for tool results
+          if (share < 25) console.log(`warn  ${text}. Use a model with a larger window, shorten MEMORY.md and USER.md, or limit the agent's tools in agent.md.`);
+          else line(true, text);
+        }
         const problem = await app.backend.check();
         line(!problem, problem ? `commands (${app.backend.name}): ${problem}` : `commands run ${app.backend.name === "local" ? "on this computer, without a sandbox" : `in the ${app.backend.name} backend`}`);
         for (const name of [...config.plugins, ...config.external_plugins.map((p) => p.name)]) {

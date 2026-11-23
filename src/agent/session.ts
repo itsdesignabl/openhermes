@@ -19,6 +19,8 @@ export class Session {
   history: ChatMessage[] = [];
   /** How much of the history the learning loop has already reviewed. */
   reflected = 0;
+  /** What was said before the turns still held in `history`, in the model's own words. */
+  summary = "";
   lastActive = Date.now();
   private persisted = false;
   private stateFile: string;
@@ -27,12 +29,13 @@ export class Session {
     this.stateFile = path.join(home.data, "sessions", `${safe(key)}.json`);
     if (opts.resume && fs.existsSync(this.stateFile)) {
       try {
-        const state = JSON.parse(fs.readFileSync(this.stateFile, "utf8")) as { id: string; file: string; history: ChatMessage[]; reflected?: number; lastActive?: number };
+        const state = JSON.parse(fs.readFileSync(this.stateFile, "utf8")) as { id: string; file: string; history: ChatMessage[]; reflected?: number; lastActive?: number; summary?: string };
         this.id = state.id;
         this.file = home.resolveInside(state.file, home.vault);
         this.history = state.history;
         this.reflected = Math.min(state.reflected ?? 0, state.history.length);
         this.lastActive = state.lastActive ?? Date.now();
+        this.summary = state.summary ?? "";
         this.persisted = true;
         return;
       } catch {
@@ -52,7 +55,16 @@ export class Session {
     this.file = file;
     this.history = [];
     this.reflected = 0;
+    this.summary = "";
     fs.rmSync(this.stateFile, { force: true });
+  }
+
+  /** Replaces the first `count` messages by a summary. The transcript note keeps everything. */
+  compact(count: number, summary: string): void {
+    this.history.splice(0, count);
+    this.reflected = Math.max(0, this.reflected - count);
+    this.summary = summary;
+    if (this.persisted) this.save();
   }
 
   markReflected(): void {
@@ -62,7 +74,7 @@ export class Session {
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
-    const state = { id: this.id, file: path.relative(this.home.vault, this.file), history: this.history, reflected: this.reflected, lastActive: this.lastActive };
+    const state = { id: this.id, file: path.relative(this.home.vault, this.file), history: this.history, reflected: this.reflected, lastActive: this.lastActive, summary: this.summary };
     const tmp = this.stateFile + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(state));
     fs.renameSync(tmp, this.stateFile);

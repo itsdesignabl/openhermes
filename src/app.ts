@@ -1,6 +1,8 @@
 import path from "node:path";
 import { buildSystemPrompt } from "./agent/context.js";
-import { runTurn, type TurnResult } from "./agent/loop.js";
+import { Calibration, contextBudget, conversationSize, type ContextBudget } from "./agent/budget.js";
+import { runTurn, toolSpecs, type TurnResult } from "./agent/loop.js";
+import { renderTranscript } from "./learning/reflect.js";
 import { recentHistory, Session } from "./agent/session.js";
 import { Bus } from "./kernel/bus.js";
 import {
@@ -93,6 +95,8 @@ export class App {
   private localModel: LocalModel;
   private providers = new Map<string, Provider>();
   private activeBackend?: Backend;
+  /** How many characters this model's tokens cover, learned from the endpoint's own counts. */
+  readonly calibration: Calibration;
   /** Skills read during the turn that is running, for the metrics log. */
   private turnSkills = new Set<string>();
   /** Messages logged while starting (for example a plugin that failed to load), for interfaces that attach afterwards. */
@@ -104,6 +108,7 @@ export class App {
     this.config = loadConfig(home);
     this.policies = loadPolicies(home);
     this.localModel = new LocalModel(home, () => this.config);
+    this.calibration = new Calibration(home.data);
   }
 
   static async start(home: Home, opts: AppOptions = {}): Promise<App> {
@@ -315,13 +320,15 @@ export class App {
   private async turn(text: string, o: SendOptions): Promise<TurnResult> {
     const session = this.conversation(o.conversation ?? (o.agent ?? this.defaultAgent) + LOCAL_SUFFIX, o.agent, o.persist);
     const agent = session.agentName;
-    const settings = this.agentSettings(agent);
     const provider = await this.getProvider(agent);
     const sessionFile = path.relative(this.home.vault, session.file).split(path.sep).join("/");
     const ctx = this.toolContext(agent, text, o.approver ?? this.opts.approver, session.id, sessionFile);
-    let tools = [...this.registry.tools.values()];
-    if (settings.tools) tools = tools.filter((t) => settings.tools!.includes(t.name));
-    const system = buildSystemPrompt(this.home, agent, this.backend.describe()) + (o.systemNote ? `\n\n${o.systemNote}` : "");
+    const tools = this.agentTools(agent);
+    const system = this.systemFor(session, agent) + (o.systemNote ? `\n\n${o.systemNote}` : "");
+    const budget = this.budgetFor(agent, system, tools);
+    // room for this turn: the user's message comes off the top, and one tool result may take at most 40% of what is left
+    const room = Math.max(1000, budget.conversationChars - text.length);
+    const historyCap = this.config.session.history_max_chars;
     this.turnSkills = new Set();
     const hooks = this.registry.hooks;
     const hookInfo = { agent, conversation: session.key };
@@ -334,14 +341,16 @@ export class App {
         hookInfo,
         sessionId: session.id,
         system,
-        history: recentHistory(session.history, this.config.session.history_max_chars),
+        history: historyCap > 0 ? recentHistory(session.history, historyCap) : session.history,
+        budgetChars: budget.conversationChars,
+        onMeasured: (chars, tokens) => this.calibration.update(chars, tokens),
         userText: text,
         tools,
         provider,
         bus: this.bus,
         toolContext: ctx,
         maxSteps: this.config.agent_loop.max_steps,
-        maxToolOutputChars: this.config.agent_loop.max_tool_output_chars,
+        maxToolOutputChars: Math.min(this.config.agent_loop.max_tool_output_chars, Math.floor(room * 0.4)),
         signal: o.signal,
       });
       session.append(result.messages, o.persist ?? false);
@@ -357,15 +366,79 @@ export class App {
         completion_tokens: result.usage.completionTokens,
         estimated: result.usage.estimated,
         ms: result.usage.ms,
+        elided: result.usage.elided,
+        dropped_turns: result.usage.droppedTurns,
         skills: [...this.turnSkills],
       });
       this.learner.afterTurn(session);
+      // Earlier turns that will not fit next time are summarised now, in the background, not while the user waits.
+      if (this.config.session.summarize && !/:(heartbeat|job):/.test(session.key) && conversationSize(session.history) > budget.conversationChars * 0.8) {
+        void this.enqueue(() => this.compact(session, agent)).catch((err) => void this.bus.emit("log", { level: "warn", message: `could not summarise the earlier conversation: ${(err as Error).message}` }));
+      }
       await hooks.run("turn.after", { ...hookInfo, text: result.text, tools_used: result.toolsUsed });
       return result;
     } finally {
       // files written before a failure are still recorded in the history
       await this.history.commit(`Turn (${agent}): ${text.replace(/\s+/g, " ").slice(0, 60)}`).catch(() => {});
     }
+  }
+
+  /** The model's context window for an agent: the bundled server's own setting, or what the settings say about the endpoint. */
+  contextWindow(agent: string = this.defaultAgent): number {
+    const usesBundled = !(this.agentSettings(agent).provider.base_url ?? this.config.provider.base_url);
+    return usesBundled && !this.opts.provider ? this.config.local_model.context_tokens : this.config.provider.context_tokens;
+  }
+
+  private systemFor(session: Session | undefined, agent: string): string {
+    const base = buildSystemPrompt(this.home, agent, this.backend.describe());
+    return session?.summary ? `${base}\n\n## Earlier in this conversation\n\n${session.summary}` : base;
+  }
+
+  private agentTools(agent: string) {
+    const allowed = this.agentSettings(agent).tools;
+    const tools = [...this.registry.tools.values()];
+    return allowed ? tools.filter((t) => allowed.includes(t.name)) : tools;
+  }
+
+  private budgetFor(agent: string, system: string, tools: ReturnType<App["agentTools"]>): ContextBudget {
+    return contextBudget({
+      windowTokens: this.contextWindow(agent),
+      reserveTokens: this.config.provider.reserve_output_tokens,
+      system,
+      specs: toolSpecs(tools),
+      charsPerToken: this.calibration.charsPerToken,
+    });
+  }
+
+  /** How the window is divided for an agent right now, for `doctor`. */
+  describeContext(agent: string = this.defaultAgent): ContextBudget {
+    return this.budgetFor(agent, this.systemFor(undefined, agent), this.agentTools(agent));
+  }
+
+  /**
+   * Replaces the older half of a conversation by a summary the model writes, so the gist stays in
+   * view when the turns themselves no longer fit. The full text stays in the session note and in search.
+   */
+  private async compact(session: Session, agent: string): Promise<void> {
+    const budget = this.budgetFor(agent, this.systemFor(session, agent), this.agentTools(agent));
+    const keep = recentHistory(session.history, Math.floor(budget.conversationChars * 0.4));
+    const count = session.history.length - keep.length;
+    if (count <= 0) return;
+    this.learner.beforeCompaction(session);
+    const old = session.history.slice(0, count);
+    // the summarising call has to fit the window too
+    const room = Math.max(1500, Math.floor((budget.windowTokens - budget.reserveTokens - 400) * budget.charsPerToken) - session.summary.length);
+    const provider = await this.getProvider(agent);
+    const result = await provider.chat(
+      [
+        { role: "system", content: SUMMARY_PROMPT.replace("{max}", String(Math.round(this.config.session.summary_max_chars / 6))) },
+        { role: "user", content: `${session.summary ? `Summary so far:\n${session.summary}\n\n` : ""}Conversation to add to the summary:\n${renderTranscript(old, room)}` },
+      ],
+      [],
+    );
+    const summary = result.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim().slice(0, this.config.session.summary_max_chars);
+    if (!summary) return; // nothing usable: the turns stay, and are simply left out when they do not fit
+    session.compact(count, summary);
   }
 
   async stop(): Promise<void> {
@@ -378,6 +451,12 @@ export class App {
     this.memory.close();
   }
 }
+
+const SUMMARY_PROMPT =
+  "You are keeping notes on a conversation between a user and their assistant, for the assistant to rely on later. " +
+  "Write one updated summary that merges the summary so far with the new part. Keep what will matter later: what the user wants, " +
+  "decisions made, facts, names, file paths, numbers, and anything still to be done. Leave out greetings and the wording of tool calls. " +
+  "Plain sentences, at most {max} words. Reply with the summary only.";
 
 function loadAgentSettingsDefaults(): AgentSettings {
   return AgentSettingsSchema.parse({});

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { App } from "../src/app.js";
@@ -359,6 +360,36 @@ test("ssh backend: the command reaches the remote shell intact, in the work fold
   const longAgo = Date.now() - 5000;
   assert.ok(hitTimeLimit(137, longAgo, 5) && hitTimeLimit(124, longAgo, 5));
   assert.ok(!hitTimeLimit(124, Date.now(), 5) && !hitTimeLimit(1, longAgo, 5) && !hitTimeLimit(null, longAgo, 5));
+});
+
+test("a time limit stops the command and anything it started", { skip: process.platform === "win32" ? "uses a POSIX shell" : false }, async () => {
+  const marker = path.join(os.tmpdir(), `oh-timeout-${process.pid}-${Date.now()}`);
+  const started = Date.now();
+  let pid = 0;
+  try {
+    // `wait` holds the shell open, so the time limit is what ends it. $! is the sleep it started.
+    const result = await exec(`sleep 30 & echo $! > ${JSON.stringify(marker)}; wait`, [], { shell: true, timeoutS: 1 });
+    assert.ok(Date.now() - started < 5000, "returned when the time limit hit");
+    assert.equal(result.code, null);
+    assert.match(result.output, /exceeded 1s/);
+    pid = Number(fs.readFileSync(marker, "utf8").trim());
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    assert.equal(alive, false, "the program the command started was still running after the time limit");
+  } finally {
+    fs.rmSync(marker, { force: true });
+    if (pid) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  }
 });
 
 test("a command that leaves a child running returns when the command itself ends", { skip: process.platform === "win32" ? "uses a POSIX shell" : false }, async () => {

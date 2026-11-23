@@ -52,6 +52,10 @@ export const ConfigSchema = z.object({
       api_key_secret: z.string().default(""),
       temperature: z.number().default(0.2),
       request_timeout_s: z.number().default(600),
+      /** The model's context window when `base_url` is set. With the bundled server, local_model.context_tokens is used. */
+      context_tokens: z.number().min(1024).default(8192),
+      /** Tokens kept free in the window for the model's answer. */
+      reserve_output_tokens: z.number().min(128).default(1024),
     })
     .prefault({}),
   local_model: z
@@ -78,8 +82,11 @@ export const ConfigSchema = z.object({
     .prefault({}),
   session: z
     .object({
-      /** Older turns beyond this many characters are dropped from what the model sees. They stay in the transcript and in search. */
-      history_max_chars: z.number().default(16000),
+      /** Optional extra cap on how much of the earlier conversation is sent. 0 means: as much as the model's window allows. */
+      history_max_chars: z.number().default(0),
+      /** Summarise earlier turns when they no longer fit, instead of only leaving them out. */
+      summarize: z.boolean().default(true),
+      summary_max_chars: z.number().default(1500),
     })
     .prefault({}),
   backend: z

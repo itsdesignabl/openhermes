@@ -55,6 +55,11 @@ export class Learner {
     if (this.eligible(session) && this.pendingTurns(session) >= this.cfg.min_turns) this.schedule(session);
   }
 
+  /** Before earlier turns are replaced by a summary: review them first, so nothing is lost to learning. */
+  beforeCompaction(session: Session): void {
+    if (this.eligible(session) && this.pendingTurns(session) >= this.cfg.min_turns) this.schedule(session);
+  }
+
   /** Periodic work while the gateway runs: review quiet conversations and run the cleanup when it is due. */
   maintenance(now: Date): void {
     if (!this.cfg.enabled) return;

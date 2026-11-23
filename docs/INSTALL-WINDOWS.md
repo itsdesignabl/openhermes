@@ -155,7 +155,7 @@ provider:
 
 Use exactly the name you gave to `ollama pull`.
 
-4. Give the model enough room. The agent's instructions and tool list take a few thousand tokens before the conversation starts. In Ollama's settings, set the context length to at least 8192. With a smaller value the model may ignore its tools or forget instructions.
+4. Give the model enough room, and tell OpenHermes how much it has. In Ollama's settings, set the context length to at least 8192. Then make sure the same number is in the settings note, on the line `context_tokens:` under `provider:` (8192 is the default). OpenHermes fits every request into that number, so if Ollama's value is smaller than what the note says, requests get cut off by Ollama and the model may ignore its tools or forget instructions.
 
 ### Option B: The bundled model server
 
@@ -349,7 +349,8 @@ That removes the program, the vault, the memory, the keys and the logs. What it 
 | "Access is denied" when creating the folder in `C:\` | Your account may not create folders there | Use another location, for example `mkdir "$HOME\Openhermes Programming Files"`, and use that path everywhere in this guide |
 | `openhermes` "is not recognized" | The alias only exists in the window where you set it | Run the `Set-Alias` line from Step 5 again |
 | `doctor` says the model endpoint is not reachable | Ollama is not running, or the address is wrong | Start Ollama; check `base_url` is `http://127.0.0.1:11434/v1` |
-| The model answers but never uses tools, or `eval` mostly fails | The model is too small, does not support tools, or its context length is too short | Raise Ollama's context length to 8192 or more; try a larger model |
+| The model answers but never uses tools, or `eval` mostly fails | The model is too small, does not support tools, or its context length is shorter than `context_tokens` in the settings | Make Ollama's context length and `provider.context_tokens` the same, 8192 or more; try a larger model |
+| The agent seems to forget what a tool returned a few steps ago | The window is small, so older tool results were set aside to make room | Expected with small windows. `openhermes doctor` shows how much room the conversation has; a larger window or shorter memory files give it more |
 | "Model endpoint returned 404" | The model name in the settings does not match | Use the exact name shown by `ollama list` |
 | "Port 18789 is in use" | A gateway is already running | `openhermes gateway status`, then `openhermes gateway stop` |
 | The Telegram bot does not answer | The channel is off, or the token is wrong | `openhermes gateway status` shows the channel's state and the reason |

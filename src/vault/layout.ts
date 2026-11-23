@@ -61,6 +61,7 @@ provider:
   model: local
   api_key_secret: ""
   temperature: 0.2
+  context_tokens: 8192        # the model's context window when base_url is set; must match the model server
 local_model:
   file: ""
   port: 18790
@@ -72,7 +73,7 @@ memory:
   user_max_chars: 2000
   search_results: 5
 session:
-  history_max_chars: 16000
+  summarize: true             # when earlier turns no longer fit the model, keep a summary of them
 backend:
   type: local                 # local | docker | ssh : where shell commands run
   docker:
@@ -122,7 +123,7 @@ plugins: []
 
 Edit the properties above. Changes are picked up without a restart.
 
-- \`provider\`: which model endpoint to talk to.
+- \`provider\`: which model endpoint to talk to. \`context_tokens\` must match the window your model server actually gives the model (in Ollama, its context length setting). The agent fits each request into it: older tool results and turns are left out or summarised when space runs short.
 - \`local_model\`: the model file in \`models/\` and how the bundled server runs it.
 - \`backend\`: where shell commands run. \`docker\` runs them in a container that sees only the workspace folder and, read-only, the vault. It needs Docker Desktop. \`ssh\` runs them on another machine.
 - \`hooks\`: programs run before or after a turn or tool call. They start in the \`runtime\` folder, receive JSON on standard input, and can refuse or change the action.

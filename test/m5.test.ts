@@ -66,7 +66,7 @@ test("each turn reports its cost: exact when the endpoint counts tokens, estimat
     };
     let app = await App.start(home, { provider: counting, watch: false });
     const exact = (await app.send("list")).usage;
-    assert.deepEqual({ ...exact, ms: 0 }, { modelCalls: 2, promptTokens: 1900, completionTokens: 17, estimated: false, ms: 0 });
+    assert.deepEqual({ ...exact, ms: 0 }, { modelCalls: 2, promptTokens: 1900, completionTokens: 17, estimated: false, ms: 0, elided: 0, droppedTurns: 0 });
     assert.ok(exact.ms >= 0);
     await app.stop();
 

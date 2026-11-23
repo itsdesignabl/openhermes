@@ -15,6 +15,9 @@ export interface TurnRecord {
   completion_tokens: number;
   estimated: boolean;
   ms: number;
+  /** Tool results and earlier turns hidden from the model because the conversation did not fit its window. */
+  elided?: number;
+  dropped_turns?: number;
   /** Skills the agent read during the turn. */
   skills: string[];
 }

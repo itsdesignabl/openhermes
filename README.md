@@ -287,6 +287,31 @@ Commands that are not on the allowlist follow the `command.sandboxed` policy whe
 
 If Docker is not running, commands fail with a message. They never fall back to running on your computer.
 
+## Small models and the context window
+
+Every request has to fit in the model's context window. OpenHermes plans for that on each call:
+
+| Part | What it is | Typical size |
+|---|---|---|
+| Fixed | Instructions, memory, skills list, tool list | About 1,200 tokens with the built-in tools; up to about 2,700 when `MEMORY.md` and `USER.md` are full |
+| Reserve | Kept free for the model's answer | 1,024 tokens |
+| Conversation | Earlier turns, plus this turn's messages and tool results | Whatever is left |
+
+When the conversation part runs short, space is freed in this order, and nothing is deleted from the stored conversation:
+
+1. Tool results from earlier turns are replaced by a one-line placeholder.
+2. This turn's older tool results likewise, keeping the latest two.
+3. Whole earlier turns are left out, oldest first.
+4. If that is still not enough, the latest tool result is cut short.
+
+A single tool result may take at most 40% of the room, so reading one large file cannot fill the window.
+
+Between turns, once a conversation has outgrown the window, the older half is replaced by a summary the model writes (`session.summarize`). The summary is shown to the model as "Earlier in this conversation". The full text stays in the session note in the vault and in search. Those turns are reviewed for learning first.
+
+**Set the window correctly.** With your own model server, `provider.context_tokens` in `vault\System\config.md` must match the window the server really gives the model. If the server says a request was too long anyway, it is retried once with half the room. `openhermes doctor` shows how the window is divided and warns when under a quarter is left for the conversation.
+
+Token counts are estimated from text length until the model server reports real ones; from then on the estimate is tuned to that model.
+
 ## How keys are stored
 
 Bot tokens and API keys you store with `openhermes secret set` are encrypted in `secrets\keys.enc.json`.
@@ -382,6 +407,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **Slack was tested against a stand-in** for Slack's API.
 - **The Obsidian pane has never been opened in Obsidian.** It type-checks against Obsidian's API and its gateway client is tested, but the interface itself is unverified.
 - **WhatsApp and Signal are not built.** Both need a separate bridge program.
+- **Context handling is untested with a real model.** The fitting and summarising logic is tested with stand-ins. How good a small model's summaries are, and how well it copes with a placeholder where a tool result used to be, is unknown.
 - **Whether learned skills help is unmeasured.** `bench` is the instrument for it and has only been run with a simulated model. Its four task types are small and synthetic, so a result there is an indication, not proof for your own work.
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.

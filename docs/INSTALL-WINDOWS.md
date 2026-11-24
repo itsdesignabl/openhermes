@@ -285,17 +285,18 @@ From then on the bot answers you, and only you. Discord and Slack are set up the
 
 ### Docker: run the agent's commands in a sandbox
 
-Without this, a command the agent runs can reach any file you can. With it, commands see only the `workspace` folder and a read-only copy of the vault.
+Without Docker, a command the agent runs can reach any file you can, and `openhermes doctor` warns you about it. With Docker running, commands are confined automatically: they see only the `workspace` folder and a read-only copy of the vault.
 
 1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
-2. In `vault\System\config.md`, under `backend:`, change `type: local` to `type: docker`.
-3. Check:
+2. Check:
 
 ```bash
 openhermes doctor
 ```
 
-The line about commands should say they run in the docker backend. The first command the agent runs downloads the container image, which takes a few minutes.
+The line about commands should say they run in the docker sandbox, found automatically. Nothing needs to be changed in the settings. The first command the agent runs downloads the container image, which takes a few minutes.
+
+If you would rather not install Docker and want the warning to stop, set `type: local` under `backend:` in `vault\System\config.md`. Commands then run on your computer. The agent still cannot change its own settings through a command, and has to ask before running one that names them.
 
 This has been tested with real containers on Linux, not with Docker Desktop on Windows.
 
@@ -355,6 +356,8 @@ That removes the program, the vault, the memory, the keys and the logs. What it 
 | "Port 18789 is in use" | A gateway is already running | `openhermes gateway status`, then `openhermes gateway stop` |
 | The Telegram bot does not answer | The channel is off, or the token is wrong | `openhermes gateway status` shows the channel's state and the reason |
 | "encrypted for a different Windows account or computer" | The home folder was copied from another computer or account, or Windows was reinstalled | Store each key again with `openhermes secret set <name>` |
+| `doctor` warns that commands are NOT sandboxed | Docker is not installed or not running | Start Docker Desktop, or set `backend.type: local` to accept running without it |
+| A message says a command changed files that control the agent and the changes were undone | The agent ran a command that modified its own settings, or you edited one of those files while a command was running | Nothing is broken. If it was your edit, make it again |
 | A change in `config.md` has no effect | A typo made the settings invalid, so the old ones are kept | `openhermes doctor` names the invalid line |
 
 If something else goes wrong, these three outputs show what is happening and are the ones to include in a bug report:

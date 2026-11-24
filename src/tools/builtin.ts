@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { PolicyAction } from "../kernel/config.js";
+import { mentionsControlFiles } from "../kernel/guard.js";
 import { ContainmentError } from "../kernel/home.js";
 import { effectiveTrust } from "../learning/scanner.js";
 import { formatNote } from "../vault/frontmatter.js";
@@ -242,9 +243,22 @@ const runCommand = defineTool({
     const blocked = unapprovedSkillIn(ctx, command);
     if (blocked) throw new Error(`The skill '${blocked}' has not been approved by the user, so nothing from its folder may be run. Tell the user; they can approve it with: openhermes skills trust ${blocked}`);
     const action: PolicyAction = ctx.policy.isAllowlisted(command) ? "command.allowlisted" : ctx.backend.sandboxed ? "command.sandboxed" : "command.other";
-    await ctx.policy.check(action, `run${ctx.backend.name === "local" ? "" : ` (${ctx.backend.name})`}: ${command}`, command);
-    const result = await ctx.backend.run(command, timeout_s);
-    return `exit code ${result.code ?? "none"}\n${result.output || "(no output)"}`;
+    const label = `run${ctx.backend.name === "local" ? "" : ` (${ctx.backend.name})`}: ${command}`;
+    if (!ctx.backend.vaultWritable) {
+      await ctx.policy.check(action, label, command);
+      const result = await ctx.backend.run(command, timeout_s);
+      return `exit code ${result.code ?? "none"}\n${result.output || "(no output)"}`;
+    }
+    // The command can reach the vault. One that names the agent's own settings, approvals or keys is
+    // always shown to the user first, whatever the policy or allowlist says.
+    if (mentionsControlFiles(ctx.home, command)) await ctx.policy.ask(action, `${label}\n(This command refers to the agent's own settings, approvals or keys.)`);
+    else await ctx.policy.check(action, label, command);
+    // Whatever it names, its effect on those files is undone.
+    const { result, restored } = await ctx.guard.run(() => ctx.backend.run(command, timeout_s));
+    const note = restored.length
+      ? `\n\nThe command changed files that control the agent (${restored.join(", ")}). Those changes were undone: only the user can change them.`
+      : "";
+    return `exit code ${result.code ?? "none"}\n${result.output || "(no output)"}${note}`;
   },
 });
 

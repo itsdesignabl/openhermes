@@ -76,7 +76,7 @@ memory:
 session:
   summarize: true             # when earlier turns no longer fit the model, keep a summary of them
 backend:
-  type: local                 # local | docker | ssh : where shell commands run
+  type: auto                  # auto | docker | local | ssh : where shell commands run
   docker:
     image: python:3.12-slim
     network: bridge           # none = commands have no internet access
@@ -126,7 +126,7 @@ Edit the properties above. Changes are picked up without a restart.
 
 - \`provider\`: which model endpoint to talk to. \`context_tokens\` must match the window your model server actually gives the model (in Ollama, its context length setting). The agent fits each request into it: older tool results and turns are left out or summarised when space runs short.
 - \`local_model\`: the model file in \`models/\` and how the bundled server runs it.
-- \`backend\`: where shell commands run. \`docker\` runs them in a container that sees only the workspace folder and, read-only, the vault. It needs Docker Desktop. \`ssh\` runs them on another machine.
+- \`backend\`: where shell commands run. \`auto\` uses a Docker container when Docker is running: it sees only the workspace folder and, read-only, the vault. When Docker is not running, commands run on this computer and you are warned. \`docker\` insists on the container, \`local\` accepts running without one, \`ssh\` runs commands on another machine.
 - \`hooks\`: programs run before or after a turn or tool call. They start in the \`runtime\` folder, receive JSON on standard input, and can refuse or change the action.
 - \`external_plugins\`: plugins written in any language. See \`docs/PLUGINS.md\` in the program folder.
 - \`mcp_servers\`: tool servers that speak the Model Context Protocol. Give each a \`name\` and either a \`command\` (a local program) or a \`url\` (with \`token_secret\` naming a stored key). \`tools: [a, b]\` limits which of its tools are offered. The agent asks before using a tool until you answer "always".

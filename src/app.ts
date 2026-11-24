@@ -6,6 +6,8 @@ import { renderTranscript } from "./learning/reflect.js";
 import { recentHistory, Session } from "./agent/session.js";
 import { Bus } from "./kernel/bus.js";
 import { Gate, gated } from "./kernel/gate.js";
+import { SettingsGuard } from "./kernel/guard.js";
+import { exec } from "./backend/exec.js";
 import {
   AgentSettingsSchema, configPath, loadAgentSettings, loadConfig, loadPolicies, policiesPath, readSecret,
   type AgentSettings, type Config, type Policies,
@@ -81,6 +83,11 @@ const channelsPlugin: Plugin = {
 };
 
 export const LOCAL_SUFFIX = ":local";
+
+export const UNSANDBOXED_WARNING =
+  "Commands the agent runs are NOT sandboxed: Docker was not found, so they run directly on this computer and can reach any file you can. " +
+  "Each one is still checked against your policies, and the agent's own settings are put back if a command changes them. " +
+  "To confine commands, install and start Docker Desktop. To accept this and stop the warning, set backend.type: local in System/config.md.";
 /** Queue name for background work. No conversation key can equal it. */
 const BACKGROUND = "\u0000background";
 
@@ -116,6 +123,10 @@ export class App {
   /** Hands requests to the model over one at a time (or as many as provider.max_parallel allows). */
   private modelGate = new Gate(() => this.config.provider.max_parallel);
   private gatedProviders = new WeakMap<Provider, Provider>();
+  /** Puts the agent's own settings back if a command that ran on this computer changed them. */
+  readonly guard: SettingsGuard;
+  /** With backend.type "auto": what was found, and when it was last checked. */
+  private sandbox: { choice: "docker" | "local"; checkedAt: number; probing?: Promise<void> } = { choice: "local", checkedAt: 0 };
   /** Turns that have finished but whose follow-up work has not been queued yet. */
   private followUps = 0;
 
@@ -124,6 +135,16 @@ export class App {
     this.policies = loadPolicies(home);
     this.localModel = new LocalModel(home, () => this.config);
     this.calibration = new Calibration(home.data);
+    this.guard = new SettingsGuard(home, () => {
+      // changes to these files were not acted on while a command ran: look at the settled state now
+      this.reloadConfig();
+      void this.learner?.scanInbox().catch(() => {});
+    }, (files) => {
+      void this.bus.emit("log", {
+        level: "error",
+        message: `A command the agent ran changed files that control it (${files.join(", ")}). The changes were undone. If you edited one of these yourself in the last moments, please make your change again.`,
+      });
+    });
   }
 
   static async start(home: Home, opts: AppOptions = {}): Promise<App> {
@@ -136,6 +157,10 @@ export class App {
     app.history = new VaultHistory(home.vault);
     await app.history.init();
     app.learner = new Learner(app);
+    if (app.config.backend.type === "auto") {
+      await app.probeSandbox();
+      if (app.sandbox.choice === "local") void app.bus.emit("log", { level: "warn", message: UNSANDBOXED_WARNING });
+    }
     void app.learner.scanInbox().catch(() => {});
     if (opts.watch !== false) {
       app.watcher = new VaultWatcher(home.vault, (abs, by) => void app.onFileChanged(abs, by));
@@ -151,9 +176,12 @@ export class App {
     } catch {
       // a file that vanished or is mid-write is picked up by the next change event
     }
-    if (abs === configPath(this.home) || abs === policiesPath(this.home)) this.reloadConfig();
+    // While a command runs on this computer, changes to the agent's own settings are not acted on:
+    // if the command made them they are about to be undone, and the settled state is read afterwards.
+    const held = this.guard.active && this.guard.covers(abs);
+    if (!held && (abs === configPath(this.home) || abs === policiesPath(this.home))) this.reloadConfig();
     // a decision typed into an Inbox note in Obsidian
-    if (by === "user" && path.dirname(abs) === path.join(this.home.vault, "Inbox")) void this.learner.scanInbox().catch(() => {});
+    if (!held && by === "user" && path.dirname(abs) === path.join(this.home.vault, "Inbox")) void this.learner.scanInbox().catch(() => {});
     await this.bus.emit("file.changed", { path: abs, by });
   }
 
@@ -223,14 +251,47 @@ export class App {
     return this.config.provider.base_url ? `${this.config.provider.model} @ ${this.config.provider.base_url}` : "bundled local model";
   }
 
-  /** Where shell commands run, as chosen by backend.type. Switching the setting takes effect on the next command. */
-  get backend(): Backend {
+  /**
+   * Looks for a running Docker, for backend.type "auto". OPENHERMES_AUTO_BACKEND=local or =docker
+   * settles the question without looking.
+   */
+  async probeSandbox(): Promise<"docker" | "local"> {
+    const forced = process.env.OPENHERMES_AUTO_BACKEND;
+    let choice: "docker" | "local";
+    if (forced === "local" || forced === "docker") choice = forced;
+    else {
+      const r = await exec(this.config.backend.docker.binary, ["version", "--format", "{{.Server.Version}}"], { timeoutS: 8 });
+      choice = r.code === 0 && r.output.trim() ? "docker" : "local";
+    }
+    const before = this.sandbox;
+    this.sandbox = { choice, checkedAt: Date.now() };
+    if (before.checkedAt && before.choice !== choice) {
+      void this.bus.emit("log", choice === "docker"
+        ? { level: "info", message: "Docker is now running: commands run in the sandbox from here on." }
+        : { level: "warn", message: `Docker is no longer running. ${UNSANDBOXED_WARNING}` });
+    }
+    return choice;
+  }
+
+  /** "auto" resolved to what is in use right now. */
+  backendType(): string {
     const type = this.config.backend.type;
+    if (type !== "auto") return type;
+    // Without a sandbox, look again now and then in the background: Docker may have been started since.
+    if (this.sandbox.choice === "local" && Date.now() - this.sandbox.checkedAt > 5 * 60_000 && !this.sandbox.probing) {
+      this.sandbox.probing = this.probeSandbox().then(() => {}, () => {});
+    }
+    return this.sandbox.choice;
+  }
+
+  /** Where shell commands run. A change of the setting, or of what "auto" finds, takes effect on the next command. */
+  get backend(): Backend {
+    const type = this.backendType();
     if (this.activeBackend?.name === type) return this.activeBackend;
     const factory = this.registry.backends.get(type);
     if (!factory) {
       void this.bus.emit("log", { level: "error", message: `backend.type '${type}' is not known (available: ${[...this.registry.backends.keys()].join(", ")}). Commands are refused until it is corrected.` });
-      return { name: type, sandboxed: true, describe: () => "", run: async () => ({ code: null, output: `Commands cannot run: backend.type '${type}' in System/config.md is not known.` }), check: async () => `backend.type '${type}' is not known`, stop: async () => {} };
+      return { name: type, sandboxed: true, vaultWritable: false, describe: () => "", run: async () => ({ code: null, output: `Commands cannot run: backend.type '${type}' in System/config.md is not known.` }), check: async () => `backend.type '${type}' is not known`, stop: async () => {} };
     }
     void this.activeBackend?.stop().catch(() => {});
     return (this.activeBackend = factory());
@@ -342,6 +403,7 @@ export class App {
       policy,
       memory: this.memory,
       backend: this.backend,
+      guard: this.guard,
       agentName: agent,
       userText,
       wrote: (abs) => {

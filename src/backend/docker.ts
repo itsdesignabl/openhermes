@@ -24,6 +24,10 @@ export class DockerBackend implements Backend {
     return this.config().backend.docker;
   }
 
+  get vaultWritable(): boolean {
+    return this.cfg.mount_vault === "rw";
+  }
+
   describe(): string {
     const vault = this.cfg.mount_vault === "none" ? "" : ` The vault is at /vault (${this.cfg.mount_vault === "ro" ? "read-only" : "writable"}).`;
     const net = this.cfg.network === "none" ? " There is no network access." : "";

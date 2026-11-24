@@ -580,7 +580,12 @@ export async function main(argv: string[]): Promise<number> {
           else line(true, text);
         }
         const problem = await app.backend.check();
-        line(!problem, problem ? `commands (${app.backend.name}): ${problem}` : `commands run ${app.backend.name === "local" ? "on this computer, without a sandbox" : `in the ${app.backend.name} backend`}`);
+        const auto = config.backend.type === "auto";
+        if (problem) line(false, `commands (${app.backend.name}): ${problem}`);
+        else if (app.backend.name === "local" && auto) {
+          console.log("warn  commands are NOT sandboxed: Docker was not found, so they run directly on this computer. Install and start Docker Desktop to confine them, or set backend.type: local to accept this.");
+        } else if (app.backend.name === "local") line(true, "commands run on this computer, without a sandbox (backend.type: local)");
+        else line(true, `commands run in the ${app.backend.name} ${app.backend.sandboxed ? "sandbox" : "backend"}${auto ? " (found automatically)" : ""}`);
         for (const name of [...config.plugins, ...config.external_plugins.map((p) => p.name)]) {
           const failure = app.startupLogs.find((e) => e.level === "error" && e.message.startsWith(`plugin '${name}'`));
           line(!failure, failure ? failure.message : `plugin '${name}' loaded`);

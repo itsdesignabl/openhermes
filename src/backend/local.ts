@@ -7,6 +7,7 @@ import type { Backend, RunResult } from "./types.js";
 export class LocalBackend implements Backend {
   readonly name = "local";
   readonly sandboxed = false;
+  readonly vaultWritable = true;
   constructor(private home: Home) {}
 
   describe(): string {

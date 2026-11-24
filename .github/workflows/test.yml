@@ -36,3 +36,76 @@ jobs:
         run: docker pull mirror.gcr.io/library/alpine:3
 
       - run: npm test
+
+      # What follows installs the release package the way a user would, on each system.
+      - name: Build the release package
+        run: node scripts/package.mjs
+
+      - name: Install, update and remove on Windows
+        if: runner.os == 'Windows'
+        shell: powershell   # Windows PowerShell 5.1, which is what a fresh Windows has
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" } }
+          $h = Join-Path $env:RUNNER_TEMP 'Openhermes Programming Files'
+          $before = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+
+          # a private copy of Node.js, the release package, start at login
+          & .\install.ps1 -HomePath $h -Package release\openhermes.zip -Node bundled -Autostart
+          if (-not (Test-Path "$h\node\node.exe")) { throw 'Node.js was not put into the home folder' }
+          if (-not (Test-Path "$h\vault\System\config.md")) { throw 'the vault was not created' }
+          $path = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (($path -split ';') -notcontains $h) { throw 'the home folder is not on the PATH' }
+
+          $out = & "$h\openhermes.cmd" version; Check 'version'; $out
+          if (-not (($out -join "`n") -match [regex]::Escape("$h\node\node.exe"))) { throw 'the launcher did not use the private Node.js' }
+          $out = & "$h\openhermes.cmd" autostart status; Check 'autostart status'; $out
+          if (-not (($out -join "`n") -match 'starts when you log in')) { throw 'autostart is not on' }
+
+          # the entry Windows runs at login must really start the gateway
+          $entry = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').OpenHermes
+          Set-Content -Path "$env:RUNNER_TEMP\login.cmd" -Value $entry -Encoding Ascii
+          & "$env:RUNNER_TEMP\login.cmd"; Check 'the startup entry'
+          & "$h\openhermes.cmd" gateway status; Check 'gateway status'
+
+          # update with the gateway running: it is stopped, the program replaced, and started again
+          & "$h\openhermes.cmd" update --from release\openhermes.zip --force; Check 'update'
+          & "$h\openhermes.cmd" gateway status; Check 'gateway status after update'
+          & "$h\openhermes.cmd" version; Check 'version after update'
+
+          # running the installer again on an existing installation updates it
+          & .\install.ps1 -HomePath $h -Package release\openhermes.zip
+          & "$h\openhermes.cmd" gateway status; Check 'gateway status after reinstall'
+
+          & "$h\uninstall.ps1" -HomePath $h -Yes
+          if (Test-Path $h) { throw 'the home folder is still there' }
+          $after = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          $same = (@($after -split ';' | Where-Object { $_ }) -join ';') -eq (@($before -split ';' | Where-Object { $_ }) -join ';')
+          if (-not $same) { throw "the PATH was not restored: '$after' instead of '$before'" }
+          if ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').OpenHermes) { throw 'the startup entry is still there' }
+
+      - name: Install from source on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $h = Join-Path $env:RUNNER_TEMP 'From Source'
+          git archive --format=zip --prefix=openhermes-main/ -o "$env:RUNNER_TEMP\source.zip" HEAD
+          & .\install.ps1 -HomePath $h -Source "$env:RUNNER_TEMP\source.zip" -Node system -NoPath
+          & "$h\openhermes.cmd" version
+          if ($LASTEXITCODE -ne 0) { throw 'the program built from source does not run' }
+          & "$h\uninstall.ps1" -HomePath $h -Yes
+
+      - name: Install and update from the package on Linux
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          h="$RUNNER_TEMP/Openhermes Programming Files"
+          mkdir -p "$h/runtime"
+          unzip -q release/openhermes.zip -d "$h/runtime"
+          node "$h/runtime/dist/src/cli.js" init
+          "$h/openhermes.sh" version
+          "$h/openhermes.sh" gateway start
+          "$h/openhermes.sh" update --from release/openhermes.zip --force
+          "$h/openhermes.sh" gateway status
+          "$h/openhermes.sh" gateway stop

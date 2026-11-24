@@ -66,43 +66,21 @@ Everything the agent knows and does lives as Markdown in a local vault you can o
 
 ## Install (Windows)
 
-The full walkthrough, with model setup, checks, optional extras and troubleshooting, is in [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). In short, with [Node.js](https://nodejs.org) 22.13 or newer and Git installed, in PowerShell:
+In PowerShell:
 
 ```bash
-mkdir "C:\Openhermes Programming Files"
+irm https://raw.githubusercontent.com/itsdesignabl/openhermes/main/install.ps1 | iex
 ```
 
-```bash
-cd "C:\Openhermes Programming Files"
-```
+This creates `C:\Openhermes Programming Files`, downloads a private copy of Node.js into it if your computer has no Node.js 22.13 or newer, downloads the program, creates the vault, and adds the folder to your PATH so `openhermes` works in every new terminal. It needs no administrator rights and no Git. Until the first release package is published it builds the program from source, which takes a few minutes longer.
 
-```bash
-git clone -b main https://github.com/itsdesignabl/openhermes runtime
-```
+| Later | Command |
+|---|---|
+| Update, keeping the vault, settings and keys | `openhermes update` |
+| Start the gateway each time you log in | `openhermes autostart on` |
+| Remove everything | `powershell -ExecutionPolicy Bypass -File "C:\Openhermes Programming Files\uninstall.ps1"` |
 
-```bash
-cd runtime
-```
-
-```bash
-npm install
-```
-
-```bash
-npm run build
-```
-
-```bash
-node dist\src\cli.js init
-```
-
-`init` creates the vault and a launcher, `C:\Openhermes Programming Files\openhermes.cmd`. To call it as `openhermes` in the current PowerShell window:
-
-```bash
-Set-Alias openhermes "C:\Openhermes Programming Files\openhermes.cmd"
-```
-
-The examples below use that name.
+The full walkthrough, with installer options, installing by hand, model setup, checks, optional extras and troubleshooting, is in [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md).
 
 On macOS and Linux the default home is `~/Openhermes Programming Files` and the launcher is `openhermes.sh`.
 
@@ -156,6 +134,9 @@ openhermes ask "what do you remember about my projects?"
 | `bench` | Measure whether learned skills make repeated tasks cheaper |
 | `stats` | What your recent turns cost, by week and by skill |
 | `doctor` | Check the installation |
+| `version` | Show which version is installed and which Node.js runs it |
+| `update` | Install the latest version (`--from <zip or link>` for a specific package) |
+| `autostart on`, `off`, `status` | Start the gateway when you log in (Windows and Linux) |
 
 | `gateway start`, `stop`, `status` | Run the always-on gateway in the background |
 | `gateway run` | Run it in the current window, with its log on screen |
@@ -366,7 +347,9 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 
 ## Known gaps
 
-- **Windows has only been exercised by the automated tests**, which run on every push. The install steps, the terminal chat and the gateway have not been used by a person on Windows.
+- **Windows has only been exercised by the automated tests**, which run on every push. They run the installer, an update, the startup entry and the uninstaller on a Windows machine, but the terminal chat and the gateway have not been used by a person on Windows.
+- **No release has been published yet.** Until one is, the installer builds from source and `openhermes update` reports that nothing is published; run the installer again to update. Publishing is done by pushing a version tag, which runs `.github/workflows/release.yml`. That workflow has never run.
+- **There is no installer for macOS or Linux,** and no start at login on macOS. Install by hand there; `update` and the launcher work the same way.
 - **Nothing has been run against a real model, or the real Telegram, Discord or Slack services.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
 - **Without Docker, commands are still not confined.** The checks for that mode protect the agent's own settings from being changed, and ask before a command that names them. They do not stop a command from reading your files, including the stored keys, or from changing anything else you can change. A command can also avoid naming a file it touches; its changes to the settings are undone all the same, but reading cannot be undone. Only the sandbox confines commands.
@@ -385,11 +368,11 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
 - **The model is still one at a time by default.** Conversations no longer wait for each other, but requests to the model are handed over one by one (`provider.max_parallel: 1`), because a single local model answers one request at a time anyway. While one chat's answer is being generated, another chat's request waits for it. Raise the setting for a cloud model or a server set up for parallel requests.
-- **The gateway does not start with Windows.** Run `openhermes gateway start` after logging in.
+- **Starting at login is off unless you ask for it** (`openhermes autostart on`, or `-Autostart` when installing). A console window may flash briefly at login.
 - **Missed schedules are not caught up.** A job due while the gateway was off is skipped, except a one-time `at` job less than a day late.
 - **Only text messages** are handled in chats; images, voice and files are ignored.
 - **Key encryption has limits.** It protects stored keys when the folder is copied, backed up, synced or read from another account. It does not protect them from a program running as you, which can ask Windows to open them the same way OpenHermes does. The gateway's own access token in `secrets\gateway-token` is not encrypted; it only works on this computer.
-- **Node.js and git are installed outside the home folder.** A portable bundle is planned.
+- **The private Node.js is checked against the checksum published next to it,** which catches a damaged download, not a compromised download site.
 - Approvals for actions during a conversation (running a command, importing a file) are still asked live in the chat, not through `Inbox\`.
 
 ## Development
@@ -397,6 +380,14 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 ```bash
 npm test
 ```
+
+To build the package the installer downloads (`release/openhermes.zip`):
+
+```bash
+node scripts/package.mjs
+```
+
+To publish a release, set the version in `package.json`, then push a tag with the same number, for example `v0.2.0`. The release workflow tests, packages and publishes it.
 
 ## License
 

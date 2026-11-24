@@ -209,13 +209,49 @@ export function scaffold(home: Home): { created: string[] } {
       created.push(rel);
     }
   }
-  const launcher = path.join(home.root, process.platform === "win32" ? "openhermes.cmd" : "openhermes.sh");
-  if (!fs.existsSync(launcher)) {
-    const body =
-      process.platform === "win32"
-        ? `@echo off\r\nset "OPENHERMES_HOME=%~dp0."\r\nnode "%~dp0runtime\\dist\\src\\cli.js" %*\r\n`
-        : `#!/bin/sh\nd="$(cd "$(dirname "$0")" && pwd)"\nOPENHERMES_HOME="$d" exec node "$d/runtime/dist/src/cli.js" "$@"\n`;
-    fs.writeFileSync(launcher, body, { mode: 0o755 });
-  }
+  writeLauncher(home);
   return { created };
+}
+
+export function launcherPath(home: Home): string {
+  return path.join(home.root, process.platform === "win32" ? "openhermes.cmd" : "openhermes.sh");
+}
+
+/**
+ * The `openhermes` command: a small script in the home folder. It uses the copy
+ * of Node.js the installer put in <home>/node when there is one, otherwise the
+ * one on the PATH. It is program, not data, so it is rewritten when it changes.
+ */
+export function writeLauncher(home: Home): void {
+  const body =
+    process.platform === "win32"
+      ? [
+          "@echo off",
+          "setlocal",
+          'set "OPENHERMES_HOME=%~dp0."',
+          'set "OPENHERMES_NODE=%~dp0node\\node.exe"',
+          'if not exist "%OPENHERMES_NODE%" set "OPENHERMES_NODE=node"',
+          '"%OPENHERMES_NODE%" "%~dp0runtime\\dist\\src\\cli.js" %*',
+          "",
+        ].join("\r\n")
+      : [
+          "#!/bin/sh",
+          'd="$(cd "$(dirname "$0")" && pwd)"',
+          'n="$d/node/bin/node"',
+          '[ -x "$n" ] || n=node',
+          'OPENHERMES_HOME="$d" exec "$n" "$d/runtime/dist/src/cli.js" "$@"',
+          "",
+        ].join("\n");
+  const file = launcherPath(home);
+  let current = "";
+  try {
+    current = fs.readFileSync(file, "utf8");
+  } catch {}
+  if (current !== body) fs.writeFileSync(file, body, { mode: 0o755 });
+}
+
+/** The Node.js program to start background work with: the bundled copy if the installer added one. */
+export function nodeProgram(home: Home): string {
+  const bundled = process.platform === "win32" ? path.join(home.root, "node", "node.exe") : path.join(home.root, "node", "bin", "node");
+  return fs.existsSync(bundled) ? bundled : process.execPath;
 }

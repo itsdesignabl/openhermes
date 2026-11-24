@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { FileSystemAdapter, ItemView, MarkdownRenderer, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
 import { GatewayDown, HermesClient, type InboxEntry, type TurnEvent } from "./client";
@@ -37,7 +38,9 @@ export default class OpenHermesPlugin extends Plugin {
   startGateway(): Promise<void> {
     return new Promise((resolve, reject) => {
       const cli = path.join(this.client.home, "runtime", "dist", "src", "cli.js");
-      const child = spawn("node", [cli, "gateway", "start", "--home", this.client.home], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      // the installer may have put its own copy of Node.js in the home folder
+      const bundled = process.platform === "win32" ? path.join(this.client.home, "node", "node.exe") : path.join(this.client.home, "node", "bin", "node");
+      const child = spawn(existsSync(bundled) ? bundled : "node", [cli, "gateway", "start", "--home", this.client.home], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (out += d));

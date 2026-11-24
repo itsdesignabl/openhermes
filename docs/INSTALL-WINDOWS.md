@@ -2,9 +2,9 @@
 
 This guide takes you from nothing to a working chat with your agent, then covers the optional parts: Obsidian, chatting from your phone, and the sandbox.
 
-**Before you start, know this:** the automated tests pass on Windows, but these steps have not yet been carried out by a person on a real Windows machine. If a step does not behave as described, [Troubleshooting](#troubleshooting) covers the likely causes.
+**Before you start, know this:** the installer is run on Windows by the automated tests on every change (install, update, start at login, uninstall), but these steps have not yet been carried out by a person on their own Windows machine. If a step does not behave as described, [Troubleshooting](#troubleshooting) covers the likely causes.
 
-Time needed: about 20 minutes, plus the time to download a model (3 GB or more).
+Time needed: a few minutes, plus the time to download a model (3 GB or more).
 
 ## What you end up with
 
@@ -13,6 +13,7 @@ One folder, `C:\Openhermes Programming Files`, holding everything:
 | Folder | Contents |
 |---|---|
 | `runtime` | The program |
+| `node` | A private copy of Node.js, only if your computer had none |
 | `vault` | The agent's notes: personality, memory, skills, settings. This is what you open in Obsidian |
 | `models` | Model files, if you use the bundled model server |
 | `data` | Search index, logs, measurements |
@@ -25,9 +26,61 @@ All commands below are for **PowerShell**, the default terminal in Windows 11. O
 
 ## Part 1: Install the program
 
-### Step 1. Install Node.js and Git
+### Step 1. Run the installer
 
-OpenHermes needs Node.js 22.13 or newer, and Git to download it.
+```bash
+irm https://raw.githubusercontent.com/itsdesignabl/openhermes/main/install.ps1 | iex
+```
+
+That one line:
+
+1. Creates `C:\Openhermes Programming Files`.
+2. Uses Node.js 22.13 or newer if you have it. If not, it downloads a private copy into the `node` folder inside the home folder, checks the download against Node's published checksum, and leaves the rest of your computer alone.
+3. Downloads the program. If a release package has been published it uses that, which needs nothing else. If none has been published yet, it downloads the source and builds it, which takes a few minutes longer. Git is not needed either way.
+4. Creates the vault.
+5. Adds the home folder to your PATH, so `openhermes` works in every terminal.
+
+It ends by printing the installed version.
+
+Nothing needs administrator rights. The only thing it changes outside the home folder is that PATH entry.
+
+### Step 2. Check the command
+
+Open a **new** PowerShell window, then:
+
+```bash
+openhermes version
+```
+
+It prints the version, which Node.js it runs on, and the home folder.
+
+### Installer options
+
+To use options, download the script first:
+
+```bash
+irm https://raw.githubusercontent.com/itsdesignabl/openhermes/main/install.ps1 -OutFile install.ps1
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File install.ps1 -Autostart
+```
+
+| Option | What it does |
+|---|---|
+| `-HomePath "<folder>"` | Install somewhere else |
+| `-Autostart` | Start the gateway each time you log in |
+| `-NoPath` | Leave your PATH alone; you then run `"C:\Openhermes Programming Files\openhermes.cmd"` |
+| `-Node bundled` | Download the private Node.js even if you have one |
+| `-Node system` | Never download Node.js; stop if a suitable one is missing |
+| `-Package <zip or link>` | Install a specific release package |
+| `-Source <zip or link>` | Build from a specific source archive |
+
+Running the installer again on an existing installation updates it and keeps your vault.
+
+### Installing by hand instead
+
+If you would rather see every step, or want a git checkout to work on the code:
 
 ```bash
 winget install OpenJS.NodeJS.LTS
@@ -37,19 +90,7 @@ winget install OpenJS.NodeJS.LTS
 winget install Git.Git
 ```
 
-Close PowerShell and open it again so the new programs are found. Then check:
-
-```bash
-node --version
-```
-
-```bash
-git --version
-```
-
-The first should print `v22.13` or higher. If you prefer, download the installers from [nodejs.org](https://nodejs.org) and [git-scm.com](https://git-scm.com) instead of using `winget`.
-
-### Step 2. Create the home folder and download the program
+Close PowerShell and open it again, then:
 
 ```bash
 mkdir "C:\Openhermes Programming Files"
@@ -63,12 +104,6 @@ cd "C:\Openhermes Programming Files"
 git clone -b main https://github.com/itsdesignabl/openhermes runtime
 ```
 
-The last word, `runtime`, matters: the program must sit in a folder with that name inside the home folder.
-
-If the repository is private, Git opens a browser window asking you to sign in to GitHub.
-
-### Step 3. Build it
-
 ```bash
 cd runtime
 ```
@@ -81,41 +116,11 @@ npm install
 npm run build
 ```
 
-`npm install` downloads the libraries the program uses. `npm run build` prints nothing when it succeeds.
-
-### Step 4. Create the vault
-
 ```bash
 node dist\src\cli.js init
 ```
 
-Expected output:
-
-```
-Home folder: C:\Openhermes Programming Files
-Created 9 starter notes in the vault.
-Open C:\Openhermes Programming Files\vault in Obsidian to view and edit it.
-```
-
-This also creates the launcher `C:\Openhermes Programming Files\openhermes.cmd`.
-
-### Step 5. Make the `openhermes` command available
-
-For the current PowerShell window:
-
-```bash
-Set-Alias openhermes "C:\Openhermes Programming Files\openhermes.cmd"
-```
-
-Check it:
-
-```bash
-openhermes help
-```
-
-The alias lasts until you close the window. To have it in every new window, add that same `Set-Alias` line to your PowerShell profile (open it with `notepad $PROFILE`). The profile is a file in your user folder, so it is one of the few things outside the home folder.
-
-The rest of this guide uses `openhermes`.
+The folder name `runtime` matters: the program must sit in a folder with that name inside the home folder. This leaves you with the launcher `C:\Openhermes Programming Files\openhermes.cmd`; add the folder to your PATH yourself, or call the launcher by its full path.
 
 ## Part 2: Connect a model
 
@@ -253,7 +258,13 @@ openhermes gateway status
 openhermes gateway stop
 ```
 
-It does not start with Windows. Run `openhermes gateway start` after you log in. Its log is `data\logs\gateway.log`.
+To have it start each time you log in:
+
+```bash
+openhermes autostart on
+```
+
+`openhermes autostart off` undoes that, and `openhermes autostart status` shows the current state. A console window may flash for a moment at login while it starts. The gateway's log is `data\logs\gateway.log`.
 
 ### Telegram: chat from your phone
 
@@ -303,41 +314,31 @@ This has been tested with real containers on Linux, not with Docker Desktop on W
 ## Updating
 
 ```bash
-openhermes gateway stop
+openhermes update
 ```
 
-```bash
-cd "C:\Openhermes Programming Files\runtime"
-```
+It stops the gateway if it is running, installs the new version, and starts the gateway again. Your vault, settings and keys are not touched. Things you added to the `runtime` folder (the bundled model server, plugins, hooks) are carried over, and the Obsidian pane is updated if you installed it.
 
-```bash
-git pull
-```
+Where the new version comes from depends on how you installed:
 
-```bash
-npm install
-```
+- **Installed by the installer:** the latest published release. Before the first release is published this reports that nothing is published; run the installer line from Step 1 again instead.
+- **Installed by hand with git:** `git pull`, `npm install` and `npm run build` in the `runtime` folder.
 
-```bash
-npm run build
-```
-
-Your vault, settings and keys are not touched by an update. Keys saved by a version from before they were encrypted are encrypted the first time they are used. If you use the Obsidian pane, run `openhermes obsidian install` again to update it.
+If the new version does not start, the old one is left in place and the command says so.
 
 ## Uninstalling
 
-1. Stop the gateway:
-
 ```bash
-openhermes gateway stop
+powershell -ExecutionPolicy Bypass -File "C:\Openhermes Programming Files\uninstall.ps1"
 ```
 
-2. Delete the folder `C:\Openhermes Programming Files`.
+It asks for confirmation, then stops the gateway, removes the startup entry and the PATH entry, and deletes the home folder: the program, the vault, the memory, the keys and the logs.
 
-That removes the program, the vault, the memory, the keys and the logs. What it does not remove:
+Deleting the folder by hand works too. It leaves behind only the PATH entry and, if you switched it on, the startup entry; both then point at nothing and do no harm.
 
-- Node.js, Git, and anything optional you installed (Ollama and its models, Obsidian, Docker Desktop). Remove these from Windows Settings → Apps if you no longer want them.
-- The `Set-Alias` line, if you added it to your PowerShell profile.
+What neither removes:
+
+- Node.js and Git if you installed them yourself, and anything optional you installed (Ollama and its models, Obsidian, Docker Desktop). Remove these from Windows Settings → Apps if you no longer want them.
 - Bots you registered with Telegram, Discord or Slack. Delete them there, or revoke their tokens.
 - Messages already sent through those services.
 
@@ -345,10 +346,12 @@ That removes the program, the vault, the memory, the keys and the logs. What it 
 
 | What you see | Likely cause | What to do |
 |---|---|---|
-| `node` or `git` "is not recognized" | The terminal was open during the install | Close PowerShell and open it again |
-| `npm` fails with "running scripts is disabled on this system" | PowerShell blocks npm's script | Use `npm.cmd install` and `npm.cmd run build`, or run those two commands in Command Prompt |
-| "Access is denied" when creating the folder in `C:\` | Your account may not create folders there | Use another location, for example `mkdir "$HOME\Openhermes Programming Files"`, and use that path everywhere in this guide |
-| `openhermes` "is not recognized" | The alias only exists in the window where you set it | Run the `Set-Alias` line from Step 5 again |
+| The installer says it could not create the folder | Your account may not create folders in `C:\` | Install somewhere else: download the script as shown under Installer options and add `-HomePath "$HOME\Openhermes Programming Files"` |
+| The installer stops with a download error | No internet connection, or a firewall blocks `github.com` or `nodejs.org` | Try again later or on another network; or install by hand |
+| `openhermes` "is not recognized" | The window was open before the install changed your PATH | Open a new PowerShell window |
+| `openhermes update` says nothing is published | No release has been published yet | Run the installer line from Step 1 again; it updates the existing installation |
+| `update` says the program folder is in use | A terminal is sitting inside `runtime`, or another OpenHermes window is open | Close them and run it again; nothing was changed |
+| (Installing by hand) `npm` fails with "running scripts is disabled on this system" | PowerShell blocks npm's script | Use `npm.cmd install` and `npm.cmd run build` |
 | `doctor` says the model endpoint is not reachable | Ollama is not running, or the address is wrong | Start Ollama; check `base_url` is `http://127.0.0.1:11434/v1` |
 | The model answers but never uses tools, or `eval` mostly fails | The model is too small, does not support tools, or its context length is shorter than `context_tokens` in the settings | Make Ollama's context length and `provider.context_tokens` the same, 8192 or more; try a larger model |
 | The agent seems to forget what a tool returned a few steps ago | The window is small, so older tool results were set aside to make room | Expected with small windows. `openhermes doctor` shows how much room the conversation has; a larger window or shorter memory files give it more |

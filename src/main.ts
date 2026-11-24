@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { App } from "./app.js";
 import { loadConfig, loadPolicies } from "./kernel/config.js";
@@ -49,6 +48,11 @@ const HELP = `openhermes <command> [options]
   stats [--days <n>]       What your recent turns cost, by week and by skill
   history                  Show the agent's recent changes to the vault
   doctor                   Check the installation
+  version                  Show which version is installed
+  update                   Install the latest version; the vault, settings and keys are kept
+        --from <zip|link>    install this package instead of the latest release
+        --force              install even if this version is already in place
+  autostart on|off|status  Start the gateway when you log in
 
 Options:
   --home <path>            Use this home folder (default: OPENHERMES_HOME, the folder
@@ -62,6 +66,7 @@ export async function main(argv: string[]): Promise<number> {
     options: {
       home: { type: "string" },
       help: { type: "boolean", short: "h" },
+      version: { type: "boolean", short: "v" },
       server: { type: "boolean" },
       "server-url": { type: "string" },
       url: { type: "string" },
@@ -73,8 +78,10 @@ export async function main(argv: string[]): Promise<number> {
       source: { type: "string" },
       "dry-run": { type: "boolean" },
       agent: { type: "string" },
+      from: { type: "string" },
     },
   });
+  if (values.version) positionals.splice(0, positionals.length, "version");
   const [command, ...rest] = positionals;
   if (values.help || !command || command === "help") {
     console.log(HELP);
@@ -210,12 +217,9 @@ export async function main(argv: string[]): Promise<number> {
 
     case "obsidian": {
       if (rest[0] !== "install") throw new Error("Use: openhermes obsidian install");
-      const built = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "obsidian");
-      if (!fs.existsSync(path.join(built, "main.js"))) throw new Error("The plugin has not been built. Run `npm run build` in the runtime folder first.");
+      const { installObsidianPlugin } = await import("./install.js");
+      const dest = installObsidianPlugin(home);
       const config = path.join(home.vault, ".obsidian");
-      const dest = path.join(config, "plugins", "openhermes");
-      fs.mkdirSync(dest, { recursive: true });
-      for (const f of ["main.js", "manifest.json", "styles.css"]) fs.copyFileSync(path.join(built, f), path.join(dest, f));
       // switch the plugin on, keeping whatever else is enabled
       const listFile = path.join(config, "community-plugins.json");
       let enabled: string[] = [];
@@ -537,12 +541,53 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    case "version": {
+      const { describeVersion, versionInfo } = await import("./install.js");
+      console.log(describeVersion(versionInfo()));
+      console.log(`Node.js ${process.version} at ${process.execPath}`);
+      console.log(`Home folder: ${home.root}`);
+      return 0;
+    }
+
+    case "update": {
+      const { update } = await import("./install.js");
+      await update(home, { from: values.from, force: values.force, log: (l) => console.log(l) });
+      return 0;
+    }
+
+    // run by `update` with the new program, to finish what the old one cannot do
+    case "post-update": {
+      const { installObsidianPlugin, obsidianPluginInstalled } = await import("./install.js");
+      const { writeLauncher } = await import("./vault/layout.js");
+      writeLauncher(home);
+      if (obsidianPluginInstalled(home)) {
+        installObsidianPlugin(home);
+        console.log("Updated the Obsidian chat pane. Restart Obsidian to load it.");
+      }
+      return 0;
+    }
+
+    case "autostart": {
+      const { autostartStatus, setAutostart } = await import("./install.js");
+      const sub = rest[0] ?? "status";
+      if (!["on", "off", "status"].includes(sub)) throw new Error("Use: openhermes autostart on | off | status");
+      const st = sub === "status" ? autostartStatus(home) : setAutostart(home, sub === "on");
+      if (!st.enabled) console.log("The gateway does not start when you log in.");
+      else if (st.forThisHome) console.log(`The gateway starts when you log in.\n  ${st.where}`);
+      else console.log(`A startup entry exists, but for a different home folder:\n  ${st.command}\nRun \`openhermes autostart on\` to point it at this one.`);
+      return 0;
+    }
+
     case "doctor": {
       let problems = 0;
       const line = (ok: boolean, text: string) => {
         if (!ok) problems++;
         console.log(`${ok ? "ok  " : "FAIL"}  ${text}`);
       };
+      {
+        const { describeVersion, versionInfo } = await import("./install.js");
+        console.log(describeVersion(versionInfo()));
+      }
       console.log(`Home folder: ${home.root}`);
       line(home.exists(), "vault exists");
       if (!home.exists()) return 1;

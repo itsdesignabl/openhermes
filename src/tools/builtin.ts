@@ -106,13 +106,19 @@ const editFile = defineTool({
     const abs = resolveUserPath(ctx, p);
     protectSystem(ctx, abs);
     if (!fs.existsSync(abs)) throw new Error(`No such file: ${p}`);
-    const text = fs.readFileSync(abs, "utf8"); // re-read at edit time: never overwrite a newer user edit
-    const count = text.split(old_text).length - 1;
-    if (count === 0) throw new Error("old_text was not found in the file. Read the file again and copy the text exactly.");
-    if (count > 1) throw new Error(`old_text appears ${count} times. Include more surrounding text so it is unique.`);
+    const find = () => {
+      const text = fs.readFileSync(abs, "utf8");
+      const count = text.split(old_text).length - 1;
+      if (count === 0) throw new Error("old_text was not found in the file. Read the file again and copy the text exactly.");
+      if (count > 1) throw new Error(`old_text appears ${count} times. Include more surrounding text so it is unique.`);
+      return text;
+    };
+    find(); // fail early, before asking anyone for approval
     const action = writeAction(ctx, abs);
     if (action) await ctx.policy.check(action, `edit ${ctx.home.display(abs)}`);
-    writeAtomic(abs, text.replace(old_text, () => new_text));
+    // Read again at the moment of writing: while approval was pending, the user or another
+    // conversation may have changed the file, and that change must not be overwritten.
+    writeAtomic(abs, find().replace(old_text, () => new_text));
     ctx.wrote(abs);
     return `Edited ${ctx.home.display(abs)}.`;
   },

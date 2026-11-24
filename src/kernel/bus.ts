@@ -10,7 +10,7 @@ export interface Events {
   "approval.resolved": { sessionId: string; action: string; approved: boolean };
   "file.changed": { path: string; by: "agent" | "user" };
   "config.reloaded": { ok: boolean; error?: string };
-  "proposal.created": { id: string; title: string; file: string; agent: string };
+  "proposal.created": { id: string; title: string; file: string; agent: string; conversation?: string };
   "proposal.resolved": { id: string; title: string; outcome: "applied" | "rejected" | "failed"; message: string };
   "learning.reflected": { session: string; applied: string[]; pending: string[]; skipped: string[] };
   "log": { level: "info" | "warn" | "error"; message: string };

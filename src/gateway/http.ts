@@ -93,7 +93,7 @@ export class GatewayHttp {
       }
       case "POST /v1/new": {
         const body = await readBody(req);
-        app.newSession(typeof body.conversation === "string" ? body.conversation : undefined);
+        await app.resetWhenIdle(typeof body.conversation === "string" ? body.conversation : undefined);
         return json(res, 200, { ok: true });
       }
       case "POST /v1/approval": {

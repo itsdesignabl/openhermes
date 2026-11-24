@@ -54,6 +54,11 @@ export const ConfigSchema = z.object({
       request_timeout_s: z.number().default(600),
       /** The model's context window when `base_url` is set. With the bundled server, local_model.context_tokens is used. */
       context_tokens: z.number().min(1024).default(8192),
+      /**
+       * How many requests may be sent to the model at the same time. 1 suits a single local model, which
+       * answers one request at a time anyway. Raise it for a cloud model or a server set up for parallel requests.
+       */
+      max_parallel: z.number().int().min(1).default(1),
       /** Tokens kept free in the window for the model's answer. */
       reserve_output_tokens: z.number().min(128).default(1024),
     })

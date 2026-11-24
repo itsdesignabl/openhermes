@@ -27,6 +27,8 @@ export interface ProposalOrigin {
   agent: string;
   /** Vault-relative path of the session note the proposal came from. */
   session: string;
+  /** Key of the conversation it came from, such as "main:telegram:42". Used to tell the right chat. */
+  conversation?: string;
 }
 
 export function skillSlug(name: string): string {

@@ -95,7 +95,8 @@ export class Scheduler {
   private started = Date.now();
   private firstSeen = new Map<string, number>();
   private reported = new Map<string, string>();
-  private ticking = false;
+  /** Heartbeats and jobs that are running right now. */
+  private running = new Set<string>();
 
   constructor(
     private home: Home,
@@ -155,49 +156,61 @@ export class Scheduler {
     });
   }
 
-  /** Runs everything that is due at `now`. Public so tests can drive time. */
+  /**
+   * Runs everything that is due at `now`, side by side, and resolves when those runs have finished.
+   * Public so tests can drive time. A run that is still going (for example waiting for an approval)
+   * is not started a second time, and does not hold up the others.
+   */
   async tick(now: Date): Promise<void> {
-    if (this.ticking) return; // a long run must not start a second pass
-    this.ticking = true;
-    try {
-      const t = now.getTime();
-      for (const agent of listAgents(this.home)) {
-        const hb = this.heartbeatSettings(agent);
-        const every = parseDuration(hb.every);
-        if (!every) continue;
-        const last = this.state.heartbeat[agent] ?? this.started;
-        if (t - last < every) continue;
-        if (!withinHours(hb.active_hours, now)) continue;
-        this.state.heartbeat[agent] = t;
-        this.save();
-        const file = path.join(this.home.vault, "Agents", agent, "HEARTBEAT.md");
-        if (!fs.existsSync(file) || heartbeatIsEmpty(fs.readFileSync(file, "utf8"))) continue;
-        await this.execute({ kind: "heartbeat", name: agent, agent, prompt: HEARTBEAT_PROMPT.replace("{agent}", agent), target: hb.target });
-      }
+    const t = now.getTime();
+    const started: Promise<unknown>[] = [];
+    const start = (id: string, fn: () => Promise<void>) => {
+      if (this.running.has(id)) return;
+      this.running.add(id);
+      started.push(fn().finally(() => this.running.delete(id)));
+    };
 
-      for (const job of this.jobs()) {
-        if (!this.firstSeen.has(job.file)) this.firstSeen.set(job.file, t);
-        const last = this.state.jobs[job.file]?.lastRun;
-        let due = false;
-        if (job.schedule) {
-          const since = new Date(Math.max(last ?? 0, this.firstSeen.get(job.file)! - 60_000));
-          const next = nextRun(job.schedule, since);
-          due = !!next && next.getTime() <= t;
-        } else if (job.every) {
-          due = t - (last ?? this.firstSeen.get(job.file)!) >= job.every;
-        } else if (job.at) {
-          due = last === undefined && job.at.getTime() <= t && t - job.at.getTime() < 86_400_000;
-        }
-        if (!due) continue;
-        this.state.jobs[job.file] = { lastRun: t, status: "running" };
-        this.save();
+    for (const agent of listAgents(this.home)) {
+      const hb = this.heartbeatSettings(agent);
+      const every = parseDuration(hb.every);
+      if (!every) continue;
+      const last = this.state.heartbeat[agent] ?? this.started;
+      if (t - last < every) continue;
+      if (!withinHours(hb.active_hours, now)) continue;
+      if (this.running.has(`heartbeat:${agent}`)) continue;
+      this.state.heartbeat[agent] = t;
+      this.save();
+      const file = path.join(this.home.vault, "Agents", agent, "HEARTBEAT.md");
+      if (!fs.existsSync(file) || heartbeatIsEmpty(fs.readFileSync(file, "utf8"))) continue;
+      start(`heartbeat:${agent}`, async () => {
+        await this.execute({ kind: "heartbeat", name: agent, agent, prompt: HEARTBEAT_PROMPT.replace("{agent}", agent), target: hb.target });
+      });
+    }
+
+    for (const job of this.jobs()) {
+      if (!this.firstSeen.has(job.file)) this.firstSeen.set(job.file, t);
+      if (this.running.has(`job:${job.file}`)) continue;
+      const last = this.state.jobs[job.file]?.lastRun;
+      let due = false;
+      if (job.schedule) {
+        const since = new Date(Math.max(last ?? 0, this.firstSeen.get(job.file)! - 60_000));
+        const next = nextRun(job.schedule, since);
+        due = !!next && next.getTime() <= t;
+      } else if (job.every) {
+        due = t - (last ?? this.firstSeen.get(job.file)!) >= job.every;
+      } else if (job.at) {
+        due = last === undefined && job.at.getTime() <= t && t - job.at.getTime() < 86_400_000;
+      }
+      if (!due) continue;
+      this.state.jobs[job.file] = { lastRun: t, status: "running" };
+      this.save();
+      start(`job:${job.file}`, async () => {
         const status = await this.execute({ kind: "job", name: job.name, agent: job.agent, prompt: job.prompt, target: job.target });
         this.state.jobs[job.file] = { lastRun: t, status };
         this.save();
-      }
-    } finally {
-      this.ticking = false;
+      });
     }
+    await Promise.all(started);
   }
 
   private async execute(r: ScheduledRun): Promise<string> {

@@ -10,6 +10,7 @@ const AUTHOR = { name: "OpenHermes agent", email: "agent@openhermes.local" };
  */
 export class VaultHistory {
   private pending = new Set<string>();
+  private lock: Promise<unknown> = Promise.resolve();
   constructor(private dir: string) {}
 
   async init(): Promise<void> {
@@ -27,10 +28,35 @@ export class VaultHistory {
     this.pending.add(rel.split(path.sep).join("/"));
   }
 
-  async commit(message: string): Promise<string | null> {
-    if (this.pending.size === 0) return null;
+  /** Commits the files recorded with `touch`. Used by background work, which runs one piece at a time. */
+  commit(message: string): Promise<string | null> {
     const files = [...this.pending];
     this.pending.clear();
+    return this.write(message, files);
+  }
+
+  /**
+   * Commits exactly these files. Used by turns: several conversations can be running at once,
+   * and each must record only what it changed itself.
+   */
+  commitFiles(message: string, absPaths: Iterable<string>): Promise<string | null> {
+    const files = new Set<string>();
+    for (const abs of absPaths) {
+      const rel = path.relative(this.dir, abs);
+      if (!rel.startsWith("..") && !path.isAbsolute(rel)) files.add(rel.split(path.sep).join("/"));
+    }
+    return this.write(message, [...files]);
+  }
+
+  /** Git operations must not interleave, so every commit waits for the one before it. */
+  private write(message: string, files: string[]): Promise<string | null> {
+    const run = this.lock.then(() => this.doCommit(message, files));
+    this.lock = run.catch(() => {});
+    return run;
+  }
+
+  private async doCommit(message: string, files: string[]): Promise<string | null> {
+    if (files.length === 0) return null;
     for (const f of files) {
       if (fs.existsSync(path.join(this.dir, f))) await git.add({ fs, dir: this.dir, filepath: f });
       else await git.remove({ fs, dir: this.dir, filepath: f }).catch(() => {});

@@ -382,7 +382,7 @@ export async function runBench(realHome: Home, opts: BenchOptions = {}): Promise
                 facts += e.applied.filter((t) => !/skill/i.test(t)).length;
               });
               app.newSession(); // ends the practice conversation, which starts the review
-              await app.enqueue(async () => {});
+              await app.idle();
               off();
               run.learning = { train_success: trainOk, review_calls: review.calls, review_tokens: review.tokens, skills_created: created, facts_saved: facts };
             }

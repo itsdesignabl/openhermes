@@ -9,6 +9,8 @@ export interface Backend {
   readonly name: string;
   /** True when a command cannot reach files outside what the backend was given. */
   readonly sandboxed: boolean;
+  /** True when a command could change files in the vault, including the agent's own settings. */
+  readonly vaultWritable: boolean;
   /** One or two sentences for the model: where commands run and which paths exist there. */
   describe(): string;
   run(command: string, timeoutS: number): Promise<RunResult>;

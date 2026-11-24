@@ -14,6 +14,7 @@ export function shellQuote(s: string): string {
 export class SshBackend implements Backend {
   readonly name = "ssh";
   readonly sandboxed = false;
+  readonly vaultWritable = false; // another machine: it cannot see the vault at all
   constructor(private config: () => Config) {}
 
   private get cfg() {

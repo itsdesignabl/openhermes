@@ -97,7 +97,11 @@ export const ConfigSchema = z.object({
   backend: z
     .object({
       /** Where shell commands run: on this computer, in a Docker container, or on another machine. */
-      type: z.string().default("local"),
+      /**
+       * "auto" (the default) uses the Docker sandbox when Docker is running and falls back to this
+       * computer, with a warning, when it is not. "docker", "local" and "ssh" pin the choice.
+       */
+      type: z.string().default("auto"),
       docker: z
         .object({
           binary: z.string().default("docker"),

@@ -1,3 +1,6 @@
+// Tests decide for themselves where commands run; "auto" must not depend on the machine they run on.
+process.env.OPENHERMES_AUTO_BACKEND ??= "local";
+
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";

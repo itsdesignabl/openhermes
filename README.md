@@ -262,80 +262,40 @@ openhermes pair approve <code>
 
 In group chats and servers the agent answers only when mentioned, and only to people you have approved. `/new` in a chat starts a fresh conversation.
 
-## Run commands in a sandbox
+## Where the agent's commands run
 
-Without a sandbox, a shell command the agent runs can reach any file you can. To confine commands:
+The agent can run shell commands. Where they run decides how much damage a bad one can do.
 
-1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
-2. In `vault\System\config.md` set `backend.type: docker`.
-3. Check it:
+**With Docker running, commands are sandboxed automatically.** This is the default (`backend.type: auto`). Commands start in `/workspace` (your `workspace` folder) inside a Linux container. The vault is at `/vault`, read-only. Your keys, the program and the rest of the computer are not visible. The container is created on the first command, kept while the agent runs so installed tools persist, and removed when it stops.
+
+**Without Docker, commands run directly on your computer, and you are told so.** A warning appears at startup, in the gateway log and in `openhermes doctor`. In that mode a command can reach any file you can, so two extra checks apply:
+
+- A command that names the agent's own settings, approvals, keys or program files always needs your approval, whatever your policies or allowlist say. "Always allow" is not offered for it, and with nobody to ask (a scheduled run) it does not run.
+- Whatever a command does, the files that control the agent are put back if it changed them: everything in `vault\System\`, each agent's `agent.md`, and the notes in `vault\Inbox\`. A changed file is restored, a deleted one is brought back, and a planted one is removed. You are told when this happens. While a command runs, changes to those files are not acted on at all.
+
+To get the sandbox, install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it. The agent notices within a few minutes, or at the next start. Check with:
 
 ```bash
 openhermes doctor
 ```
 
-Commands then start in `/workspace` (your `workspace` folder) inside a Linux container. The vault is at `/vault`, read-only. The container is created on the first command, kept while the agent runs so installed tools persist, and removed when it stops.
+| `backend.type` | Meaning |
+|---|---|
+| `auto` | Sandbox when Docker is running, otherwise this computer with a warning. The default for new vaults |
+| `docker` | Always the sandbox. If Docker is not running, commands fail with a message; they never fall back to your computer |
+| `local` | Always this computer, without the warning. The two extra checks still apply |
+| `ssh` | Another machine, over SSH |
+
+A vault created before this default existed has `type: local` written in `vault\System\config.md`. Change it to `auto` to get the automatic choice.
 
 | Setting under `backend.docker` | Default | Meaning |
 |---|---|---|
 | `image` | `python:3.12-slim` | What is installed in the container |
 | `network` | `bridge` | `none` cuts the container off from the internet |
-| `mount_vault` | `ro` | `rw` lets commands change the vault, `none` hides it |
+| `mount_vault` | `ro` | `rw` lets commands change the vault (the settings are then guarded as described above), `none` hides it |
 | `memory`, `cpus`, `pids_limit` | `2g`, `2`, `512` | Limits |
 
 Commands that are not on the allowlist follow the `command.sandboxed` policy when the sandbox is on. Set it to `auto` in `policies.md` if you want the agent to work in the sandbox without asking.
-
-If Docker is not running, commands fail with a message. They never fall back to running on your computer.
-
-## Several conversations at once
-
-Each conversation has its own queue: every chat, the terminal, the Obsidian pane, and each heartbeat or job.
-
-- A turn that is busy running a command, or waiting for you to approve something, holds up only its own conversation. Other chats, heartbeats and jobs carry on.
-- Within one conversation, messages are still handled strictly in order.
-- Reviews, the cleanup and Inbox decisions run in the background and do not delay any chat.
-- A notice that something is waiting for your approval goes to the chat that conversation took place in, and only after the reply to your message has been sent.
-- Each turn records exactly the files it changed in the vault history, even when turns overlap.
-
-Requests to the model are a separate matter: by default they are sent one at a time, see `provider.max_parallel` under Known gaps.
-
-## Small models and the context window
-
-Every request has to fit in the model's context window. OpenHermes plans for that on each call:
-
-| Part | What it is | Typical size |
-|---|---|---|
-| Fixed | Instructions, memory, skills list, tool list | About 1,200 tokens with the built-in tools; up to about 2,700 when `MEMORY.md` and `USER.md` are full |
-| Reserve | Kept free for the model's answer | 1,024 tokens |
-| Conversation | Earlier turns, plus this turn's messages and tool results | Whatever is left |
-
-When the conversation part runs short, space is freed in this order, and nothing is deleted from the stored conversation:
-
-1. Tool results from earlier turns are replaced by a one-line placeholder.
-2. This turn's older tool results likewise, keeping the latest two.
-3. Whole earlier turns are left out, oldest first.
-4. If that is still not enough, the latest tool result is cut short.
-
-A single tool result may take at most 40% of the room, so reading one large file cannot fill the window.
-
-Between turns, once a conversation has outgrown the window, the older half is replaced by a summary the model writes (`session.summarize`). The summary is shown to the model as "Earlier in this conversation". The full text stays in the session note in the vault and in search. Those turns are reviewed for learning first.
-
-**Set the window correctly.** With your own model server, `provider.context_tokens` in `vault\System\config.md` must match the window the server really gives the model. If the server says a request was too long anyway, it is retried once with half the room. `openhermes doctor` shows how the window is divided and warns when under a quarter is left for the conversation.
-
-Token counts are estimated from text length until the model server reports real ones; from then on the estimate is tuned to that model.
-
-## How keys are stored
-
-Bot tokens and API keys you store with `openhermes secret set` are encrypted in `secrets\keys.enc.json`.
-
-| System | Protection |
-|---|---|
-| Windows | Sealed for your Windows account by Windows itself. Nothing to remember, and nothing to set up |
-| macOS, Linux | Encrypted with a passphrase if you set the `OPENHERMES_PASSPHRASE` environment variable; otherwise stored in plain text, and `openhermes doctor` says so |
-
-- Keys saved in plain text by an earlier version are encrypted the next time they are used, and the plain-text file is removed.
-- On Windows, the keys can only be opened by the same account on the same computer. If you copy the home folder to another computer, or reinstall Windows, store the keys again with `openhermes secret set`. Everything else in the folder carries over.
-- `openhermes secret list` shows the names of stored keys and how they are protected. It never prints a value.
 
 ## Scheduled work
 
@@ -409,7 +369,8 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **Windows has only been exercised by the automated tests**, which run on every push. The install steps, the terminal chat and the gateway have not been used by a person on Windows.
 - **Nothing has been run against a real model, or the real Telegram, Discord or Slack services.** The agent loop is tested against a scripted stand-in, and the channels against local stand-ins for both services. `eval` measures a real model.
 - **The local model download is untested.** `model install` was written without access to GitHub or Hugging Face, so the first real run may need a fix. Pointing `provider.base_url` at Ollama or LM Studio does not depend on it.
-- **Commands are not sandboxed by default.** With `backend.type: local`, a shell command can touch any path, including the settings files the agent's file tools are barred from. Commands not on the allowlist ask for approval first. Use the Docker backend to confine them.
+- **Without Docker, commands are still not confined.** The checks for that mode protect the agent's own settings from being changed, and ask before a command that names them. They do not stop a command from reading your files, including the stored keys, or from changing anything else you can change. A command can also avoid naming a file it touches; its changes to the settings are undone all the same, but reading cannot be undone. Only the sandbox confines commands.
+- **The settings guard can undo your own edit.** If you change a file in `System`, an `agent.md` or an Inbox note at the very moment a command is running on your computer, your change is put back along with anything the command did, and you are told to make it again.
 - **The Docker backend was tested on Linux only**, with a real Docker daemon and an Alpine image. It has not been run with Docker Desktop on Windows, and the default image `python:3.12-slim` could not be downloaded in the test environment.
 - **The SSH backend was tested against a stand-in**, not a real remote machine. When a command there is stopped at its time limit, programs it had started may keep running on that machine, depending on its `timeout` program.
 - **The scanner matches known patterns.** It catches the common attack shapes and is not a guarantee. Read an imported skill before trusting it.

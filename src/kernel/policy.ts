@@ -34,6 +34,15 @@ export class PolicyEngine {
     });
   }
 
+  /**
+   * Asks the user even where the policy says "auto". For actions that would normally pass but look
+   * like they touch something sensitive. A policy of "deny" still refuses without asking.
+   */
+  async ask(action: PolicyAction, detail: string): Promise<void> {
+    if (this.valueOf(action) === "deny") throw new PolicyDenied(action, "policy is set to deny");
+    if (!(await this.approver(action, detail))) throw new PolicyDenied(action, "the user declined");
+  }
+
   mcpAllowed(tool: string): boolean {
     return this.getPolicies().mcp_allowlist.includes(tool);
   }

@@ -3,7 +3,7 @@ import { buildSystemPrompt } from "./agent/context.js";
 import { Calibration, contextBudget, conversationSize, type ContextBudget } from "./agent/budget.js";
 import { runTurn, toolSpecs, type TurnResult } from "./agent/loop.js";
 import { renderTranscript } from "./learning/reflect.js";
-import { recentHistory, Session } from "./agent/session.js";
+import { historyToKeep, recentHistory, Session } from "./agent/session.js";
 import { Bus } from "./kernel/bus.js";
 import {
   AgentSettingsSchema, configPath, loadAgentSettings, loadConfig, loadPolicies, policiesPath, readSecret,
@@ -421,11 +421,15 @@ export class App {
    */
   private async compact(session: Session, agent: string): Promise<void> {
     const budget = this.budgetFor(agent, this.systemFor(session, agent), this.agentTools(agent));
-    const keep = recentHistory(session.history, Math.floor(budget.conversationChars * 0.4));
+    const keepChars = Math.floor(budget.conversationChars * 0.4);
+    const keep = historyToKeep(session.history, keepChars);
     const count = session.history.length - keep.length;
-    if (count <= 0) return;
+    // The newest turn is the whole history and is already over the slice. It stays as messages.
+    // A summary is written once beside it, for a later request that cannot fit the turn itself.
+    const summarizeBeside = count === 0 && session.history.length > 0 && recentHistory(session.history, keepChars).length === 0 && !session.summary;
+    if (count <= 0 && !summarizeBeside) return;
     this.learner.beforeCompaction(session);
-    const old = session.history.slice(0, count);
+    const old = session.history.slice(0, count > 0 ? count : session.history.length);
     // the summarising call has to fit the window too
     const room = Math.max(1500, Math.floor((budget.windowTokens - budget.reserveTokens - 400) * budget.charsPerToken) - session.summary.length);
     const provider = await this.getProvider(agent);

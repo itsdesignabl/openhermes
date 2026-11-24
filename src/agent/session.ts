@@ -119,6 +119,19 @@ export function recentHistory(history: ChatMessage[], maxChars: number): ChatMes
   return history.slice(cut);
 }
 
+/**
+ * Messages left in place when an older part of the session is replaced by a summary.
+ * Same cut as `recentHistory`, except when the newest turn is already over `maxChars`.
+ * That turn stays whole. Keeping nothing there would drop the exchange that just happened,
+ * and every turn before it.
+ */
+export function historyToKeep(history: ChatMessage[], maxChars: number): ChatMessage[] {
+  const keep = recentHistory(history, maxChars);
+  if (keep.length > 0 || history.length === 0) return keep;
+  const lastUser = history.findLastIndex((m) => m.role === "user");
+  return history.slice(lastUser < 0 ? 0 : lastUser);
+}
+
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }

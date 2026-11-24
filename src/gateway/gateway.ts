@@ -131,9 +131,12 @@ export class Gateway {
   }
 
   /** Tell the user in their last chat that something is waiting for approval. */
-  private async notifyProposal(e: { id: string; title: string; agent: string }): Promise<void> {
+  private async notifyProposal(e: { id: string; title: string; agent: string; conversation?: string }): Promise<void> {
     if (!this.app.config.learning.notify) return;
-    const target = this.resolveTarget("last", e.agent);
+    // The chat the conversation took place in. A conversation key is "<agent>:<channel>:<chat id>".
+    // For conversations without a chat (the terminal, Obsidian) fall back to the last chat used.
+    const fromChat = e.conversation?.startsWith(`${e.agent}:`) ? this.resolveTarget(e.conversation.slice(e.agent.length + 1), e.agent) : null;
+    const target = fromChat ?? this.resolveTarget("last", e.agent);
     if (!target) return;
     await target.channel.send(
       target.peer,
@@ -209,7 +212,8 @@ export class Gateway {
     const conversation = `${agent}:${chatKey}`;
     const command = m.text.trim().toLowerCase();
     if (command === "/new" || command === "/reset") {
-      this.app.newSession(conversation);
+      // waits for a turn still running in this chat, so the reset cannot cut it off halfway
+      await this.app.resetWhenIdle(conversation);
       this.app.conversation(conversation, agent, true);
       return channel.send(m.peer, "Started a new conversation.");
     }

@@ -23,7 +23,7 @@ async function withApp(steps: Steps, fn: (x: Ctx) => Promise<void>, opts: { conf
   const logs: string[] = [];
   app.bus.on("log", (e) => void logs.push(`${e.level}: ${e.message}`));
   try {
-    await fn({ app, provider, home, logs, drain: () => app.enqueue(async () => {}) });
+    await fn({ app, provider, home, logs, drain: () => app.idle() });
   } finally {
     await app.stop();
     cleanup();
@@ -476,7 +476,7 @@ test("in chat: the user is told when something waits, and can list, approve and 
   try {
     gateway.pairing.approve(gateway.pairing.request("fake", "42", "Ada")!);
     await say("how do I deploy?");
-    await app.enqueue(async () => {});
+    await app.idle();
     await new Promise((r) => setImmediate(r));
     const [a, b] = app.learner.pending();
     assert.equal(sent[0], "Sure.");

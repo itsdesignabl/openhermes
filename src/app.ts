@@ -5,6 +5,7 @@ import { runTurn, toolSpecs, type TurnResult } from "./agent/loop.js";
 import { renderTranscript } from "./learning/reflect.js";
 import { recentHistory, Session } from "./agent/session.js";
 import { Bus } from "./kernel/bus.js";
+import { Gate, gated } from "./kernel/gate.js";
 import {
   AgentSettingsSchema, configPath, loadAgentSettings, loadConfig, loadPolicies, policiesPath, readSecret,
   type AgentSettings, type Config, type Policies,
@@ -80,6 +81,14 @@ const channelsPlugin: Plugin = {
 };
 
 export const LOCAL_SUFFIX = ":local";
+/** Queue name for background work. No conversation key can equal it. */
+const BACKGROUND = "\u0000background";
+
+/** What one turn has written and read, kept per turn because turns of different conversations overlap. */
+interface TurnState {
+  files: Set<string>;
+  skills: Set<string>;
+}
 
 /** The running agent system: kernel, plugins, memory, history and any number of conversations. */
 export class App {
@@ -97,12 +106,18 @@ export class App {
   private activeBackend?: Backend;
   /** How many characters this model's tokens cover, learned from the endpoint's own counts. */
   readonly calibration: Calibration;
-  /** Skills read during the turn that is running, for the metrics log. */
-  private turnSkills = new Set<string>();
   /** Messages logged while starting (for example a plugin that failed to load), for interfaces that attach afterwards. */
   readonly startupLogs: { level: "info" | "warn" | "error"; message: string }[] = [];
-  /** Turns run one at a time: one local model, one vault history. */
-  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * One queue per conversation, so a turn that is busy, or waiting for an approval, holds up only
+   * its own conversation. Background work (reviews, cleanup, Inbox decisions) has a queue of its own.
+   */
+  private lanes = new Map<string, Promise<unknown>>();
+  /** Hands requests to the model over one at a time (or as many as provider.max_parallel allows). */
+  private modelGate = new Gate(() => this.config.provider.max_parallel);
+  private gatedProviders = new WeakMap<Provider, Provider>();
+  /** Turns that have finished but whose follow-up work has not been queued yet. */
+  private followUps = 0;
 
   private constructor(readonly home: Home, private opts: AppOptions) {
     this.config = loadConfig(home);
@@ -169,7 +184,15 @@ export class App {
     }
   }
 
+  /** The model for an agent. Every request made through it waits its turn at the model gate. */
   async getProvider(agent: string = this.defaultAgent): Promise<Provider> {
+    const raw = await this.rawProvider(agent);
+    let wrapped = this.gatedProviders.get(raw);
+    if (!wrapped) this.gatedProviders.set(raw, (wrapped = gated(raw, this.modelGate)));
+    return wrapped;
+  }
+
+  private async rawProvider(agent: string): Promise<Provider> {
     if (this.opts.provider) return this.opts.provider;
     if (this.registry.providerFactory) return this.registry.providerFactory();
     const base = this.config.provider;
@@ -214,7 +237,7 @@ export class App {
   }
 
   /** The user answered "always": add the command or tool to its allowlist in System/policies.md. */
-  private allowAlways(action: string, key: string): void {
+  private allowAlways(action: string, key: string, turn?: TurnState): void {
     const field = action === "mcp.call" ? "mcp_allowlist" : "command_allowlist";
     try {
       const file = policiesPath(this.home);
@@ -223,7 +246,7 @@ export class App {
       if (list.includes(key)) return;
       note.data[field] = [...list, key];
       fs.writeFileSync(file, formatNote(note.data, note.body));
-      this.recordWrite(file);
+      this.recordWrite(file, turn);
       this.reloadConfig();
       void this.bus.emit("log", { level: "info", message: `Added to the ${action === "mcp.call" ? "tool" : "command"} allowlist: ${key}` });
     } catch (err) {
@@ -243,27 +266,57 @@ export class App {
     return this.conversation(this.defaultAgent + LOCAL_SUFFIX);
   }
 
+  /** Starts a conversation afresh at once. Use `resetWhenIdle` when a turn may be running in it. */
   newSession(key: string = this.defaultAgent + LOCAL_SUFFIX): void {
     const session = this.conversation(key);
     this.learner.beforeReset(session);
     session.reset();
   }
 
+  /** Starts a conversation afresh once the turn running in it, if any, has finished. */
+  resetWhenIdle(key: string = this.defaultAgent + LOCAL_SUFFIX): Promise<void> {
+    return this.inLane(key, async () => this.newSession(key));
+  }
+
   conversations(): Session[] {
     return [...this.sessions.values()];
   }
 
-  /** Runs `fn` when no turn or other background work is running. Everything that writes the vault goes through here. */
-  enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn);
-    this.queue = run.catch(() => {});
+  /** Runs `fn` after whatever is already queued under `key`. */
+  private inLane<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.lanes.get(key) ?? Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    this.lanes.set(key, tail);
+    void tail.then(() => {
+      if (this.lanes.get(key) === tail) this.lanes.delete(key);
+    });
     return run;
   }
 
-  /** Call after writing a file in the home folder, so it is indexed, versioned and not mistaken for a user edit. */
-  recordWrite(abs: string): void {
+  /**
+   * Runs background work (a review, the cleanup, an Inbox decision) after the background work queued
+   * before it. It does not wait for conversations, and conversations do not wait for it.
+   */
+  enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    return this.inLane(BACKGROUND, fn);
+  }
+
+  /** Resolves when nothing is running or queued: no turn in any conversation and no background work. */
+  async idle(): Promise<void> {
+    while (this.lanes.size || this.followUps) {
+      if (this.lanes.size) await Promise.all([...this.lanes.values()]);
+      else await new Promise((r) => setImmediate(r)); // follow-up work of a finished turn is about to be queued
+    }
+  }
+
+  /**
+   * Call after writing a file in the home folder, so it is indexed, versioned and not mistaken for a user edit.
+   * Inside a turn the file is noted for that turn's own commit; otherwise for the next background commit.
+   */
+  recordWrite(abs: string, turn?: TurnState): void {
     this.watcher?.markAgentWrite(abs);
-    this.history.touch(abs);
+    if (turn) turn.files.add(abs);
+    else this.history.touch(abs);
     try {
       this.memory.update(abs);
     } catch {
@@ -271,7 +324,7 @@ export class App {
     }
   }
 
-  toolContext(agent: string, userText: string, approver: Approver | undefined, sessionId = "", sessionFile = ""): ToolContext {
+  toolContext(agent: string, userText: string, approver: Approver | undefined, sessionId = "", sessionFile = "", turn?: TurnState): ToolContext {
     const policy = new PolicyEngine(
       () => this.policies,
       async (action, detail) => {
@@ -280,7 +333,7 @@ export class App {
         await this.bus.emit("approval.resolved", { sessionId, action, approved: !!approved });
         return approved;
       },
-      (action, key) => this.allowAlways(action, key),
+      (action, key) => this.allowAlways(action, key, turn),
     );
     const skillPath = /^Skills\/([^/]+)\/SKILL\.md$/i;
     return {
@@ -300,13 +353,13 @@ export class App {
             // a skill file without readable properties is left as the agent wrote it
           }
         }
-        this.recordWrite(abs);
+        this.recordWrite(abs, turn);
       },
       read: (abs) => {
         const m = skillPath.exec(path.relative(this.home.vault, abs).split(path.sep).join("/"));
         if (m) {
           recordSkillUse(this.home, m[1]!);
-          this.turnSkills.add(m[1]!);
+          turn?.skills.add(m[1]!);
         }
       },
     };
@@ -314,7 +367,8 @@ export class App {
 
   send(text: string, options: SendOptions | AbortSignal = {}): Promise<TurnResult> {
     const o: SendOptions = options instanceof AbortSignal ? { signal: options } : options;
-    return this.enqueue(() => this.turn(text, o));
+    // queued behind earlier turns of the same conversation only
+    return this.inLane(o.conversation ?? (o.agent ?? this.defaultAgent) + LOCAL_SUFFIX, () => this.turn(text, o));
   }
 
   private async turn(text: string, o: SendOptions): Promise<TurnResult> {
@@ -322,16 +376,18 @@ export class App {
     const agent = session.agentName;
     const provider = await this.getProvider(agent);
     const sessionFile = path.relative(this.home.vault, session.file).split(path.sep).join("/");
-    const ctx = this.toolContext(agent, text, o.approver ?? this.opts.approver, session.id, sessionFile);
+    // what this turn writes and reads is kept apart from other conversations running at the same time
+    const state: TurnState = { files: new Set(), skills: new Set() };
+    const ctx = this.toolContext(agent, text, o.approver ?? this.opts.approver, session.id, sessionFile, state);
     const tools = this.agentTools(agent);
     const system = this.systemFor(session, agent) + (o.systemNote ? `\n\n${o.systemNote}` : "");
     const budget = this.budgetFor(agent, system, tools);
     // room for this turn: the user's message comes off the top, and one tool result may take at most 40% of what is left
     const room = Math.max(1000, budget.conversationChars - text.length);
     const historyCap = this.config.session.history_max_chars;
-    this.turnSkills = new Set();
     const hooks = this.registry.hooks;
     const hookInfo = { agent, conversation: session.key };
+    let succeeded = false;
     try {
       const before = await hooks.run("turn.before", { ...hookInfo, text });
       if (typeof before.text === "string") text = before.text;
@@ -354,7 +410,7 @@ export class App {
         signal: o.signal,
       });
       session.append(result.messages, o.persist ?? false);
-      this.recordWrite(session.file);
+      this.recordWrite(session.file, state);
       recordTurn(this.home, {
         at: new Date().toISOString(),
         agent,
@@ -368,18 +424,32 @@ export class App {
         ms: result.usage.ms,
         elided: result.usage.elided,
         dropped_turns: result.usage.droppedTurns,
-        skills: [...this.turnSkills],
+        skills: [...state.skills],
       });
-      this.learner.afterTurn(session);
-      // Earlier turns that will not fit next time are summarised now, in the background, not while the user waits.
-      if (this.config.session.summarize && !/:(heartbeat|job):/.test(session.key) && conversationSize(session.history) > budget.conversationChars * 0.8) {
-        void this.enqueue(() => this.compact(session, agent)).catch((err) => void this.bus.emit("log", { level: "warn", message: `could not summarise the earlier conversation: ${(err as Error).message}` }));
-      }
       await hooks.run("turn.after", { ...hookInfo, text: result.text, tools_used: result.toolsUsed });
+      succeeded = true;
       return result;
     } finally {
       // files written before a failure are still recorded in the history
-      await this.history.commit(`Turn (${agent}): ${text.replace(/\s+/g, " ").slice(0, 60)}`).catch(() => {});
+      await this.history.commitFiles(`Turn (${agent}): ${text.replace(/\s+/g, " ").slice(0, 60)}`, state.files).catch(() => {});
+      // Follow-up work starts only now, when the turn is complete, so its messages (such as
+      // "something is waiting for your approval") cannot overtake the turn's own reply.
+      if (succeeded) {
+        this.followUps++;
+        setImmediate(() => {
+          this.followUps--;
+          this.afterTurn(session, agent, budget.conversationChars);
+        });
+      }
+    }
+  }
+
+  private afterTurn(session: Session, agent: string, roomChars: number): void {
+    this.learner.afterTurn(session);
+    // Earlier turns that will not fit next time are summarised now, in the background, not while the user waits.
+    if (this.config.session.summarize && !/:(heartbeat|job):/.test(session.key) && conversationSize(session.history) > roomChars * 0.8) {
+      // in this conversation's own queue: its next turn waits for the summary, other conversations do not
+      void this.inLane(session.key, () => this.compact(session, agent)).catch((err) => void this.bus.emit("log", { level: "warn", message: `could not summarise the earlier conversation: ${(err as Error).message}` }));
     }
   }
 
@@ -443,7 +513,7 @@ export class App {
 
   async stop(): Promise<void> {
     this.watcher?.stop();
-    await this.queue;
+    await this.idle();
     await this.activeBackend?.stop().catch(() => {});
     await Promise.all(this.registry.externals.map((p) => p.stop().catch(() => {})));
     await Promise.all(this.registry.mcp.map((c) => c.stop().catch(() => {})));

@@ -287,6 +287,18 @@ Commands that are not on the allowlist follow the `command.sandboxed` policy whe
 
 If Docker is not running, commands fail with a message. They never fall back to running on your computer.
 
+## Several conversations at once
+
+Each conversation has its own queue: every chat, the terminal, the Obsidian pane, and each heartbeat or job.
+
+- A turn that is busy running a command, or waiting for you to approve something, holds up only its own conversation. Other chats, heartbeats and jobs carry on.
+- Within one conversation, messages are still handled strictly in order.
+- Reviews, the cleanup and Inbox decisions run in the background and do not delay any chat.
+- A notice that something is waiting for your approval goes to the chat that conversation took place in, and only after the reply to your message has been sent.
+- Each turn records exactly the files it changed in the vault history, even when turns overlap.
+
+Requests to the model are a separate matter: by default they are sent one at a time, see `provider.max_parallel` under Known gaps.
+
 ## Small models and the context window
 
 Every request has to fit in the model's context window. OpenHermes plans for that on each call:
@@ -411,7 +423,7 @@ The agent cannot edit `policies.md`, anything in `secrets\` or `runtime\`, or th
 - **Whether learned skills help is unmeasured.** `bench` is the instrument for it and has only been run with a simulated model. Its four task types are small and synthetic, so a result there is an indication, not proof for your own work.
 - **How well a real model reviews conversations is unmeasured.** The review logic is tested with scripted replies. A small local model may save too much, too little, or badly worded skills; check the first few results in `Inbox` and `openhermes history`.
 - **Similar skills are not merged.** The cleanup archives unused skills but does not combine two that overlap.
-- **One turn at a time.** Messages from different chats queue behind each other, and a turn waiting for an approval holds the queue until you answer or the time limit (5 minutes by default) passes.
+- **The model is still one at a time by default.** Conversations no longer wait for each other, but requests to the model are handed over one by one (`provider.max_parallel: 1`), because a single local model answers one request at a time anyway. While one chat's answer is being generated, another chat's request waits for it. Raise the setting for a cloud model or a server set up for parallel requests.
 - **The gateway does not start with Windows.** Run `openhermes gateway start` after logging in.
 - **Missed schedules are not caught up.** A job due while the gateway was off is skipped, except a one-time `at` job less than a day late.
 - **Only text messages** are handled in chats; images, voice and files are ignored.

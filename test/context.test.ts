@@ -197,7 +197,7 @@ test("across turns: earlier turns are summarised in the background and the summa
     let app = await App.start(home, { provider, watch: false });
     const key = "main:telegram:42";
     const send = (t: string) => app.send(t, { conversation: key, persist: true });
-    const drain = () => app.enqueue(async () => {});
+    const drain = () => app.idle();
     const budget = app.describeContext();
     try {
       for (let i = 1; i <= 8; i++) {
@@ -253,7 +253,7 @@ test("when summarising is off or yields nothing, older turns are simply left out
         const budget = app.describeContext();
         for (let i = 1; i <= 9; i++) {
           await app.send(`Turn ${i}`);
-          await app.enqueue(async () => {});
+          await app.idle();
         }
         const turns = provider.seen.filter((s) => !s.system.startsWith("You are"));
         assert.ok(turns.every((s) => s.chars <= budget.conversationChars));

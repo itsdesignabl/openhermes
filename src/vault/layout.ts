@@ -62,6 +62,7 @@ provider:
   api_key_secret: ""
   temperature: 0.2
   context_tokens: 8192        # the model's context window when base_url is set; must match the model server
+  max_parallel: 1             # requests sent to the model at the same time; raise for a cloud model
 local_model:
   file: ""
   port: 18790

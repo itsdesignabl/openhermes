@@ -103,7 +103,11 @@ export class Learner {
   private schedule(session: Session): void {
     const messages = session.history.slice(session.reflected);
     session.markReflected();
-    const origin: ProposalOrigin = { agent: session.agentName, session: path.relative(this.app.home.vault, session.file).split(path.sep).join("/") };
+    const origin: ProposalOrigin = {
+      agent: session.agentName,
+      session: path.relative(this.app.home.vault, session.file).split(path.sep).join("/"),
+      conversation: session.key,
+    };
     void this.app
       .enqueue(() => this.review(messages, origin))
       .catch((err) => this.log("error", `review of ${origin.session} failed: ${(err as Error).message}`));
@@ -167,7 +171,7 @@ export class Learner {
         waiting.add(title);
         this.app.recordWrite(item.file);
         outcome.pending.push(title);
-        await this.app.bus.emit("proposal.created", { id: item.id, title, file: item.file, agent: origin.agent });
+        await this.app.bus.emit("proposal.created", { id: item.id, title, file: item.file, agent: origin.agent, conversation: origin.conversation });
       } else {
         try {
           let changed: string[];

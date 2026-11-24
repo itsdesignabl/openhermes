@@ -387,7 +387,7 @@ To build the package the installer downloads (`release/openhermes.zip`):
 node scripts/package.mjs
 ```
 
-To publish a release, set the version in `package.json`, then push a tag with the same number, for example `v0.2.0`. The release workflow tests, packages and publishes it.
+To publish a release, set the version in `package.json`, then either push a tag with the same number, for example `v0.2.0`, or run the Release workflow by hand on `main` from the Actions tab. It tests, packages and publishes.
 
 ## License
 

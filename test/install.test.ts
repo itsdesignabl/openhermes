@@ -78,7 +78,9 @@ test("update: a package replaces the program, keeps what the user added, and lea
     fs.writeFileSync(zip, fakePackage("9.9.9"));
 
     const lines: string[] = [];
+    const cwd = process.cwd();
     await update(home, { from: zip, log: (l) => lines.push(l) });
+    assert.equal(process.cwd(), cwd, "the working folder is left alone when it is not inside the program folder");
 
     assert.equal(versionInfo(home.runtime).version, "9.9.9");
     assert.equal(describeVersion(versionInfo(home.runtime)), "OpenHermes 9.9.9 (release package, commit abcdef1)");

@@ -221,7 +221,9 @@ export async function update(home: Home, opts: UpdateOptions): Promise<void> {
 
     await stopGateway();
     // a terminal sitting inside runtime would keep the folder in use
-    if (!path.relative(runtime, process.cwd()).startsWith("..")) process.chdir(home.root);
+    // (on Windows a folder on another drive has no relative path, only an absolute one)
+    const rel = path.relative(runtime, process.cwd());
+    if (!rel.startsWith("..") && !path.isAbsolute(rel)) process.chdir(home.root);
     try {
       await renameWithRetry(runtime, old);
     } catch (err) {

@@ -330,6 +330,49 @@ test("while a command runs, a change to the settings is not acted on, and overla
   }
 });
 
+test("a command does not undo an allowlist entry or an Inbox note written while it ran", async () => {
+  const { home, cleanup } = tempHome();
+  try {
+    const policies = v(home, "System/policies.md");
+    const original = fs.readFileSync(policies, "utf8");
+    const guard = new SettingsGuard(home);
+    const planted = v(home, "Inbox/planted.md");
+    const proposal = v(home, "Inbox/ab12 remember a deadline.md");
+    const allowed = original.replace("mcp_allowlist: []", "mcp_allowlist:\n  - npm test");
+
+    const result = await guard.run(async () => {
+      // Another conversation's "always", and a review filing a proposal. Both go through recordWrite,
+      // which tells the guard. The command itself never touches those files.
+      fs.writeFileSync(policies, allowed);
+      guard.note(policies);
+      fs.mkdirSync(path.dirname(proposal), { recursive: true });
+      fs.writeFileSync(proposal, "---\ntype: proposal\nstatus: pending\n---\nRemember the deadline.\n");
+      guard.note(proposal);
+      fs.writeFileSync(planted, "---\ntype: proposal\nstatus: approved\n---\n");
+      return "ran";
+    });
+
+    assert.equal(result.result, "ran");
+    assert.equal(fs.readFileSync(policies, "utf8"), allowed, "the allowlist entry written during the command stays");
+    assert.equal(fs.readFileSync(proposal, "utf8").includes("Remember the deadline."), true);
+    assert.ok(!fs.existsSync(planted), "a note the command created is removed");
+    assert.deepEqual(result.restored, ["vault/Inbox/planted.md"]);
+
+    // If the command changes the file after the real write, that version is not trusted: the copy from
+    // before the command returns, not the command's text and not the write it overwrote.
+    const before = fs.readFileSync(policies, "utf8");
+    const tampered = await guard.run(async () => {
+      fs.writeFileSync(policies, allowed + "\n# noted\n");
+      guard.note(policies);
+      fs.writeFileSync(policies, "tampered by the command");
+    });
+    assert.equal(fs.readFileSync(policies, "utf8"), before);
+    assert.ok(tampered.restored.some((f) => f.endsWith("policies.md")));
+  } finally {
+    cleanup();
+  }
+});
+
 test("with live file watching: tampered rules never become active, and the user's own later edit still does", async () => {
   const { home, cleanup } = tempHome();
   try {

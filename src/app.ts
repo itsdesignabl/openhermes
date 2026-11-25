@@ -376,6 +376,8 @@ export class App {
    */
   recordWrite(abs: string, turn?: TurnState): void {
     this.watcher?.markAgentWrite(abs);
+    // A command running in another conversation must not put this write back.
+    this.guard.note(abs);
     if (turn) turn.files.add(abs);
     else this.history.touch(abs);
     try {

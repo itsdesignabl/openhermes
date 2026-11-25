@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { App } from "../src/app.js";
 import { Calibration, contextBudget, conversationSize, fitConversation, isContextOverflow, toolsWireChars } from "../src/agent/budget.js";
+import { historyToKeep, recentHistory } from "../src/agent/session.js";
 import { toolSpecs } from "../src/agent/loop.js";
 import { main } from "../src/main.js";
 import type { ChatMessage, ChatResult, Provider, ToolSpec } from "../src/provider/openai.js";
@@ -88,6 +89,16 @@ test("fitting: space is freed in order of least loss, and tool calls keep their 
   }
   assert.equal(fitConversation(history, produced, 100).fits, false, "when even that is not enough, it says so");
   assert.equal(history[2]!.content.length, 3000, "what is stored is never altered");
+});
+
+test("a newest turn that is over the kept slice is still the part a summary must leave in place", () => {
+  const history = [user("The deadline is Friday"), says("Noted."), user("x".repeat(5000)), says("Read.")];
+  assert.equal(recentHistory(history, 1000).length, 0, "the newest turn alone is over the slice, so the usual cut keeps nothing");
+  const keep = historyToKeep(history, 1000);
+  assert.equal(keep[0]!.content, "x".repeat(5000));
+  assert.equal(keep.at(-1)!.content, "Read.");
+  assert.equal(history.length - keep.length, 2, "only the earlier turn is eligible to be replaced");
+  assert.deepEqual(historyToKeep(history, 100_000), history, "a conversation that fits is left untouched");
 });
 
 test("overflow errors from different model servers are recognised", () => {
@@ -234,6 +245,67 @@ test("across turns: earlier turns are summarised in the background and the summa
       app.newSession(key);
       await send("Fresh start");
       assert.ok(!provider.seen.at(-1)!.system.includes("Earlier in this conversation"), "a new conversation starts without the old summary");
+    } finally {
+      await app.stop();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("summarising leaves the newest turn in the session when that turn is too big for the kept slice", async () => {
+  const { home, cleanup } = smallWindowHome({ learning: { enabled: false } });
+  try {
+    const provider = recorder((s) => {
+      if (s.system.startsWith("You are keeping notes")) return text("The deadline is Friday.");
+      return text("Answer.");
+    });
+    const app = await App.start(home, { provider, watch: false });
+    try {
+      const budget = app.describeContext();
+      await app.send("The deadline is Friday");
+      await app.enqueue(async () => {});
+      const pasted = "Pasted survey notes. ".repeat(Math.ceil(budget.conversationChars / 20));
+      await app.send(pasted);
+      await app.enqueue(async () => {});
+
+      const session = app.session;
+      assert.equal(session.history[0]!.content, pasted, "the turn that just happened is not replaced by the summary");
+      assert.equal(session.history.at(-1)!.content, "Answer.");
+      assert.ok(!session.history.some((m) => m.content === "The deadline is Friday"), "the earlier turn is the part that was replaced");
+      assert.equal(session.summary, "The deadline is Friday.");
+      const notes = provider.seen.filter((s) => s.system.startsWith("You are keeping notes"));
+      assert.equal(notes.length, 1);
+      assert.match(notes[0]!.messages[0]!.content, /The deadline is Friday/);
+      assert.ok(!notes[0]!.messages[0]!.content.includes(pasted.slice(0, 200)), "the oversized newest turn is not what crowds the summary");
+
+      await app.send("What was the deadline?");
+      const asked = provider.seen.filter((s) => s.messages.some((m) => m.content === "What was the deadline?")).at(-1)!;
+      assert.match(asked.system, /## Earlier in this conversation\n\nThe deadline is Friday\.$/);
+    } finally {
+      await app.stop();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("one oversized turn is summarised beside the messages, not deleted", async () => {
+  const { home, cleanup } = smallWindowHome({ learning: { enabled: false } });
+  try {
+    const provider = recorder((s) => (s.system.startsWith("You are keeping notes") ? text("The survey is due on Friday.") : text("Answer.")));
+    const app = await App.start(home, { provider, watch: false });
+    try {
+      const budget = app.describeContext();
+      const pasted = "Pasted survey notes. ".repeat(Math.ceil(budget.conversationChars / 20));
+      await app.send(pasted);
+      await app.enqueue(async () => {});
+      assert.equal(app.session.history[0]!.content, pasted);
+      assert.equal(app.session.summary, "The survey is due on Friday.");
+
+      await app.send("What was the date in it?");
+      const asked = provider.seen.filter((s) => s.messages.some((m) => m.content === "What was the date in it?")).at(-1)!;
+      assert.match(asked.system, /## Earlier in this conversation\n\nThe survey is due on Friday\.$/);
     } finally {
       await app.stop();
     }
